@@ -6,3 +6,4 @@ npm-debug.log
 
 neuroroute-backend/.env
 .env
+neuroroute-backend/.env.example
