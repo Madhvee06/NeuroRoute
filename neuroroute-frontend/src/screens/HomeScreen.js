@@ -30,10 +30,6 @@ export default function HomeScreen({ navigation }) {
   const [places, setPlaces] = useState([]);
   const [placesLoading, setPlacesLoading] = useState(true);
 
-  const [routeResult, setRouteResult] = useState(null);
-  const [routeLoading, setRouteLoading] = useState(false);
-  const [routeError, setRouteError] = useState('');
-
   // Load the logged-in user's name/profile every time this screen is focused
   useFocusEffect(
     useCallback(() => {
@@ -71,41 +67,16 @@ export default function HomeScreen({ navigation }) {
     })();
   }, []);
 
-  const handleFindRoute = async () => {
+  // Navigate to RouteOptionsScreen instead of fetching + showing inline.
+  // RouteOptionsScreen owns the actual /api/routes/plan call and map.
+  const handleFindRoute = () => {
     if (!destination) return;
-    setRouteError('');
-    setRouteResult(null);
-    setRouteLoading(true);
-
-    try {
-      const token = await AsyncStorage.getItem('token');
-      const res = await fetch(`${API_URL}/api/routes/plan`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          source: source || `${FALLBACK_LAT},${FALLBACK_LNG}`,
-          destination,
-          profile: userProfile,
-          preferences: { avoidCrowds: true, avoidNoise: true },
-        }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setRouteError(data.error || 'Could not plan a route');
-        setRouteLoading(false);
-        return;
-      }
-
-      setRouteResult(data);
-      setRouteLoading(false);
-    } catch (err) {
-      setRouteLoading(false);
-      setRouteError('Could not reach the server. Check your API_URL and Wi-Fi connection.');
-    }
+    navigation?.navigate('RouteOptions', {
+      source: source || `${FALLBACK_LAT},${FALLBACK_LNG}`,
+      destination,
+      profile: userProfile,
+      preferences: { avoidCrowds: true, avoidNoise: true },
+    });
   };
 
   return (
@@ -171,35 +142,10 @@ export default function HomeScreen({ navigation }) {
           <TouchableOpacity
             style={[styles.findButton, !destination && styles.findButtonDisabled]}
             onPress={handleFindRoute}
-            disabled={!destination || routeLoading}
+            disabled={!destination}
           >
-            {routeLoading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.findButtonText}>Find a comfortable route</Text>
-            )}
+            <Text style={styles.findButtonText}>Find a comfortable route</Text>
           </TouchableOpacity>
-
-          {!!routeError && (
-            <Text style={[styles.emergencyText, { color: COLORS.error, marginTop: 10 }]}>
-              {routeError}
-            </Text>
-          )}
-
-          {routeResult && (
-            <View style={{ marginTop: 16 }}>
-              <Text style={styles.comfortValue}>
-                Sensory score: {routeResult.recommendedRoute.sensoryScore}
-              </Text>
-              <Text style={styles.placeType}>
-                {Math.round(routeResult.recommendedRoute.distanceMeters / 100) / 10} km ·{' '}
-                {Math.round(routeResult.recommendedRoute.durationSeconds / 60)} min
-              </Text>
-              <Text style={[styles.placeType, { marginTop: 6 }]}>
-                {routeResult.explanation}
-              </Text>
-            </View>
-          )}
         </View>
 
         <TouchableOpacity

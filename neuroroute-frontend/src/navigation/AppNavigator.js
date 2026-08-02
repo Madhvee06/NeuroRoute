@@ -5,15 +5,16 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import WelcomeScreen from '../screens/WelcomeScreen';
 import LoginScreen from '../screens/LoginScreen';
 import SignupScreen from '../screens/SignupScreen';
-import HomeScreen from '../screens/HomeScreen';
 import ProfileSelectionScreen from '../screens/ProfileSelectionScreen';
 import PreferencesScreen from '../screens/PreferencesScreen';
+import HomeScreen from '../screens/HomeScreen';
+import RouteOptionsScreen from '../screens/RouteOptionsScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 
 // ---------------------------------------------------------------
 // NeuroRoute — App Navigator
-// Registers every screen as a route. Each screen receives a
-// `navigation` prop automatically, which is what powers calls
-// like navigation.navigate('Login') inside the screen files.
+// Flow: Welcome -> Login/Signup -> (Signup only) ProfileSelection
+//       -> Preferences -> Home
 // ---------------------------------------------------------------
 
 const Stack = createNativeStackNavigator();
@@ -24,7 +25,7 @@ export default function AppNavigator() {
       <Stack.Navigator
         initialRouteName="Welcome"
         screenOptions={{
-          headerShown: false, // our screens draw their own back links/headers
+          headerShown: false,
         }}
       >
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
@@ -33,6 +34,9 @@ export default function AppNavigator() {
         <Stack.Screen name="ProfileSelection" component={ProfileSelectionScreen} />
         <Stack.Screen name="Preferences" component={PreferencesScreen} />
         <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="RouteOptions" component={RouteOptionsScreen} />
+        <Stack.Screen name="Settings" component={SettingsScreen} />
+        {/* Add RouteDetail here once you build it */}
       </Stack.Navigator>
     </NavigationContainer>
   );

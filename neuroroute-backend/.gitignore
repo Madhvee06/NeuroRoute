@@ -3,3 +3,7 @@ node_modules/
 npm-debug.log
 .DS_Store
 *.log
+
+neuroroute-backend/.env
+.env
+neuroroute-backend/.env.example
