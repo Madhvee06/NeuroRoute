@@ -8,6 +8,7 @@ import SignupScreen from '../screens/SignupScreen';
 import ProfileSelectionScreen from '../screens/ProfileSelectionScreen';
 import PreferencesScreen from '../screens/PreferencesScreen';
 import HomeScreen from '../screens/HomeScreen';
+import RouteOptionsScreen from '../screens/RouteOptionsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 
 // ---------------------------------------------------------------
@@ -33,8 +34,9 @@ export default function AppNavigator() {
         <Stack.Screen name="ProfileSelection" component={ProfileSelectionScreen} />
         <Stack.Screen name="Preferences" component={PreferencesScreen} />
         <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="RouteOptions" component={RouteOptionsScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
-        {/* Add RouteOptions + RouteDetail here once you build them */}
+        {/* Add RouteDetail here once you build it */}
       </Stack.Navigator>
     </NavigationContainer>
   );
