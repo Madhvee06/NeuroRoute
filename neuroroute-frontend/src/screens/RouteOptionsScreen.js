@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,23 +9,29 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { WebView } from 'react-native-webview';
 import { COLORS } from '../theme';
 import styles from './RouteOptionsScreen.styles';
 import { API_URL } from '../config/api';
 
 // ---------------------------------------------------------------
-// NeuroRoute — Route Options Screen (with map)
-// Matches the REAL backend contract from routeController.js:
+// NeuroRoute — Route Options Screen (pure OpenStreetMap via Leaflet)
+//
+// Same backend contract as before:
 //   POST /api/routes/plan
-//   body: { source, destination, profile, preferences }  <- plain
-//         address strings, backend geocodes them server-side
+//   body: { source, destination, profile, preferences }
 //   response: { recommendedRoute, alternativeRoutes, explanation,
 //               nearbyQuietPlaces, journeyId }
-// recommendedRoute + alternativeRoutes are combined here into one
-// list (recommended always shown first). Only recommendedRoute
-// comes with a real explanation from the backend; alternatives get
-// a short generated one based on their sensory score.
+//
+// Map layer changed: react-native-maps (Google Maps) -> WebView
+// running Leaflet.js against real OpenStreetMap tiles. No API key,
+// no native map SDK — matches the rest of the OSM stack already
+// used on the backend (Nominatim, Overpass, OSRM).
+//
+// Because a WebView's HTML only loads once, route selection after
+// the initial load is handled by calling a JS function already
+// defined inside the page (`selectRoute`) via injectJavaScript,
+// rather than re-rendering native map components.
 // ---------------------------------------------------------------
 
 const ROUTE_LINE_COLORS = [COLORS.primary, '#B08968', '#8AA6C1'];
@@ -42,9 +48,111 @@ function fallbackExplanation(score) {
   return 'This route has a higher sensory load than the recommended option.';
 }
 
+// OSRM/GeoJSON gives coordinates as [lng, lat]. Leaflet wants [lat, lng].
+function toLatLngs(geometry) {
+  if (!geometry?.coordinates) return [];
+  return geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+}
+
+// Builds the full HTML page loaded into the WebView, once, on first
+// render. Route geometries + colors are baked in at build time;
+// which route is "selected" afterwards is controlled at runtime via
+// injectJavaScript calling window.selectRoute(id).
+function buildMapHtml(routes) {
+  const routesData = routes.map((r, index) => ({
+    id: r.id,
+    coords: toLatLngs(r.geometry),
+    color: ROUTE_LINE_COLORS[index % ROUTE_LINE_COLORS.length],
+  }));
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html,
+body{
+    width:100%;
+    height:100%;
+    margin:0;
+    padding:0;
+    overflow:hidden;
+}
+
+#map{
+    width:100vw;
+    height:100vh;
+}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const routesData = ${JSON.stringify(routesData)};
+  const map = L.map('map', { zoomControl: false });
+
+// Force Leaflet to recalculate the map size after rendering
+setTimeout(() => {
+    map.invalidateSize();
+}, 300);
+
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+    // Draw every route, dim by default; keep references so we can
+    // restyle the selected one later without redrawing everything.
+    const lines = {};
+    routesData.forEach((r) => {
+      lines[r.id] = L.polyline(r.coords, { color: r.color, weight: 3, opacity: 0.55 }).addTo(map);
+      console.log("coords", r.coords);
+    });
+
+    let startMarker = null;
+    let endMarker = null;
+
+    // Called from React Native via injectJavaScript whenever the
+    // user taps a different route card.
+    window.selectRoute = function (id) {
+      Object.keys(lines).forEach((key) => {
+        const isSelected = String(key) === String(id);
+        lines[key].setStyle({ weight: isSelected ? 6 : 3, opacity: isSelected ? 1 : 0.45 });
+        if (isSelected) lines[key].bringToFront();
+      });
+
+      const selected = routesData.find((r) => String(r.id) === String(id));
+      if (!selected || selected.coords.length === 0) return;
+
+      if (startMarker) map.removeLayer(startMarker);
+      if (endMarker) map.removeLayer(endMarker);
+      startMarker = L.marker(selected.coords[0]).addTo(map).bindPopup('Start');
+      endMarker = L.marker(selected.coords[selected.coords.length - 1])
+        .addTo(map)
+        .bindPopup('Destination');
+
+      map.fitBounds(lines[id].getBounds(), { padding: [60, 60] });
+      setTimeout(() => {
+    map.invalidateSize();
+}, 100);
+    };
+
+    // Select the first route (recommended) as soon as the page loads
+    if (routesData.length > 0) {
+      window.selectRoute(routesData[0].id);
+    }
+  </script>
+</body>
+</html>
+`;
+}
+
 export default function RouteOptionsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const mapRef = useRef(null);
+  const webViewRef = useRef(null);
   const { source, destination, profile, preferences } = route?.params || {};
 
   const [routes, setRoutes] = useState([]); // combined [recommended, ...alternatives]
@@ -64,32 +172,34 @@ export default function RouteOptionsScreen({ navigation, route }) {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          source,
-          destination,
-          profile,
-          preferences,
-        }),
+        body: JSON.stringify({ source, destination, profile, preferences }),
       });
 
       const data = await res.json();
+
+      console.log("ROUTE RESPONSE");
+console.log(JSON.stringify(data, null, 2));
+      console.log("FULL RESPONSE:", JSON.stringify(data, null, 2));
+
+console.log(
+  "Recommended Geometry:",
+  JSON.stringify(data.recommendedRoute?.geometry, null, 2)
+);
+
+console.log(
+  "Coordinates:",
+  data.recommendedRoute?.geometry?.coordinates
+);
       if (!res.ok) throw new Error(data.error || 'Could not plan a route');
 
       const combined = [
         { ...data.recommendedRoute, isRecommended: true },
-        ...(data.alternativeRoutes || []).map((r) => ({
-          ...r,
-          isRecommended: false,
-        })),
+        ...(data.alternativeRoutes || []).map((r) => ({ ...r, isRecommended: false })),
       ];
 
       setRoutes(combined);
       setTopExplanation(data.explanation || '');
-
-      if (combined.length > 0) {
-        setSelectedId(combined[0].id);
-        fitMapToRoute(combined[0]);
-      }
+      if (combined.length > 0) setSelectedId(combined[0].id);
     } catch (err) {
       setError(err.message || 'Could not load routes. Check your connection.');
     } finally {
@@ -101,28 +211,22 @@ export default function RouteOptionsScreen({ navigation, route }) {
     fetchRoutes();
   }, []);
 
-  // geometry is GeoJSON ([lng, lat] pairs) from OSRM via osrmService
-  const toLatLngs = (geometry) => {
-    if (!geometry?.coordinates) return [];
-    return geometry.coordinates.map(([lng, lat]) => ({
-      latitude: lat,
-      longitude: lng,
-    }));
-  };
+  // Map HTML only needs to be rebuilt when the route list itself
+  // changes (i.e. after a fresh fetch) — NOT on every selection tap.
+  const mapHtml = useMemo(() => (routes.length > 0 ? buildMapHtml(routes) : null), [routes]);
 
-  const fitMapToRoute = (routeToFit) => {
-    const coords = toLatLngs(routeToFit.geometry);
-    if (coords.length > 0 && mapRef.current) {
-      mapRef.current.fitToCoordinates(coords, {
-        edgePadding: { top: 80, right: 60, bottom: 260, left: 60 },
-        animated: true,
-      });
+  // Tell the already-loaded map which route to highlight, without
+  // reloading the whole WebView.
+  useEffect(() => {
+    if (selectedId != null && webViewRef.current) {
+      webViewRef.current.injectJavaScript(
+        `window.selectRoute(${JSON.stringify(selectedId)}); true;`
+      );
     }
-  };
+  }, [selectedId]);
 
   const handleSelectCard = (r) => {
     setSelectedId(r.id);
-    fitMapToRoute(r);
   };
 
   const handleStartRoute = () => {
@@ -163,49 +267,27 @@ export default function RouteOptionsScreen({ navigation, route }) {
       {!loading && !error && (
         <>
           <View style={styles.mapWrap}>
-            <MapView
-              ref={mapRef}
-              provider={PROVIDER_GOOGLE}
-              style={styles.map}
-              initialRegion={{
-                latitude: 19.076,
-                longitude: 72.8777,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
-              }}
-            >
-              {routes.map((r, index) => {
-                const isSelected = r.id === selectedId;
-                return (
-                  <Polyline
-                    key={r.id}
-                    coordinates={toLatLngs(r.geometry)}
-                    strokeColor={ROUTE_LINE_COLORS[index % ROUTE_LINE_COLORS.length]}
-                    strokeWidth={isSelected ? 6 : 3}
-                    zIndex={isSelected ? 2 : 1}
-                  />
-                );
-              })}
-
-              {routes[0] && toLatLngs(routes[0].geometry).length > 0 && (
-                <>
-                  <Marker
-                    coordinate={toLatLngs(routes[0].geometry)[0]}
-                    title="Start"
-                    pinColor={COLORS.primary}
-                  />
-                  <Marker
-                    coordinate={
-                      toLatLngs(routes[0].geometry)[
-                        toLatLngs(routes[0].geometry).length - 1
-                      ]
-                    }
-                    title="Destination"
-                    pinColor={COLORS.accent}
-                  />
-                </>
-              )}
-            </MapView>
+            {mapHtml && (
+              <WebView
+    ref={webViewRef}
+    originWhitelist={['*']}
+    javaScriptEnabled={true}
+    domStorageEnabled={true}
+    mixedContentMode="always"
+    source={{ html: mapHtml }}
+    style={styles.map}
+    onLoadEnd={() => {
+        webViewRef.current?.injectJavaScript(`
+            setTimeout(() => {
+                if(window.map){
+                    window.map.invalidateSize();
+                }
+            },300);
+            true;
+        `);
+    }}
+/>
+            )}
           </View>
 
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 8 }]}>
@@ -225,17 +307,12 @@ export default function RouteOptionsScreen({ navigation, route }) {
                 return (
                   <TouchableOpacity
                     key={r.id}
-                    style={[
-                      styles.routeCard,
-                      isSelected && styles.routeCardSelected,
-                    ]}
+                    style={[styles.routeCard, isSelected && styles.routeCardSelected]}
                     onPress={() => handleSelectCard(r)}
                   >
                     {isRecommended && (
                       <View style={styles.recommendedBadge}>
-                        <Text style={styles.recommendedBadgeText}>
-                          Recommended
-                        </Text>
+                        <Text style={styles.recommendedBadgeText}>Recommended</Text>
                       </View>
                     )}
 
@@ -244,10 +321,7 @@ export default function RouteOptionsScreen({ navigation, route }) {
                         <View
                           style={[
                             styles.routeColorDot,
-                            {
-                              backgroundColor:
-                                ROUTE_LINE_COLORS[index % ROUTE_LINE_COLORS.length],
-                            },
+                            { backgroundColor: ROUTE_LINE_COLORS[index % ROUTE_LINE_COLORS.length] },
                           ]}
                         />
                         <Text style={styles.routeName}>
@@ -255,12 +329,7 @@ export default function RouteOptionsScreen({ navigation, route }) {
                         </Text>
                       </View>
                       <View>
-                        <Text
-                          style={[
-                            styles.scoreValue,
-                            { color: scoreColor(r.sensoryScore) },
-                          ]}
-                        >
+                        <Text style={[styles.scoreValue, { color: scoreColor(r.sensoryScore) }]}>
                           {r.sensoryScore}
                         </Text>
                         <Text style={styles.scoreLabel}>sensory score</Text>
@@ -274,9 +343,7 @@ export default function RouteOptionsScreen({ navigation, route }) {
                     </View>
 
                     <Text style={styles.explanationText}>
-                      {isRecommended
-                        ? topExplanation
-                        : fallbackExplanation(r.sensoryScore)}
+                      {isRecommended ? topExplanation : fallbackExplanation(r.sensoryScore)}
                     </Text>
                   </TouchableOpacity>
                 );
