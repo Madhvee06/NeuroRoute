@@ -95,6 +95,12 @@ body{
   const map = L.map('map', { zoomControl: false });
   window.map = map;
 
+  // Always give the map an initial view right away, so tiles start
+  // loading immediately. Don't rely solely on fitBounds() from route
+  // data below — if coordinates are missing/malformed, fitBounds()
+  // can silently fail and leave the map with no view at all (grey box).
+  map.setView([20.5937, 78.9629], 5); // safe fallback (India-wide view)
+
 // Force Leaflet to recalculate the map size after rendering
 setTimeout(() => {
     map.invalidateSize();
@@ -109,6 +115,10 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     // restyle the selected one later without redrawing everything.
     const lines = {};
     routesData.forEach((r) => {
+      if (r.coords.length === 0) {
+        console.log('Route has no coordinates, skipping draw:', r.id);
+        return;
+      }
       lines[r.id] = L.polyline(r.coords, { color: r.color, weight: 3, opacity: 0.55 }).addTo(map);
       console.log("coords", r.coords);
     });
@@ -126,7 +136,10 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       });
 
       const selected = routesData.find((r) => String(r.id) === String(id));
-      if (!selected || selected.coords.length === 0) return;
+      if (!selected || selected.coords.length === 0 || !lines[id]) {
+        console.log('No coordinates available for route', id, '- map stays at fallback view');
+        return;
+      }
 
       if (startMarker) map.removeLayer(startMarker);
       if (endMarker) map.removeLayer(endMarker);

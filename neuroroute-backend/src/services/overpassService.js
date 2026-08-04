@@ -18,7 +18,11 @@ exports.findNearbyQuietPlaces = async (lat, lng, radiusMeters = 1500) => {
   `;
 
   const resp = await axios.post(OVERPASS_URL, query, {
-    headers: { 'Content-Type': 'text/plain' },
+    headers: {
+      'Content-Type': 'text/plain',
+      'Accept': 'application/json',
+      'User-Agent': 'NeuroRoute/1.0 (contact: your-email@example.com)',
+    },
   });
 
   const elements = resp.data.elements || [];

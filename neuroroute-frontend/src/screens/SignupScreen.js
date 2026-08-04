@@ -58,6 +58,7 @@ export default function SignupScreen({ navigation }) {
       navigation?.navigate('ProfileSelection'); // was 'ProfileSelection' — not registered yet
     } catch (err) {
       setLoading(false);
+      console.log('SIGNUP ERROR:', err.message, err);
       setError('Could not reach the server. Check your API_URL and Wi-Fi connection.');
     }
   };
