@@ -129,8 +129,4 @@ exports.getHistory = async (req, res) => {
       .limit(50)
       .select('sourceText destinationText sensoryScore travelTimeSeconds distanceMeters createdAt');
     res.json({ journeys });
-  } catch (err) {
-    console.error('History fetch error:', err.message);
-    res.status(500).json({ error: 'Could not fetch journey history' });
-  }
-};
+
