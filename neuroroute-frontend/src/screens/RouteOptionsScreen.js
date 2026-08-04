@@ -93,6 +93,7 @@ body{
   <script>
     const routesData = ${JSON.stringify(routesData)};
   const map = L.map('map', { zoomControl: false });
+  window.map = map;
 
 // Force Leaflet to recalculate the map size after rendering
 setTimeout(() => {

@@ -6,6 +6,7 @@ const NOMINATIM_URL =
 // Converts a free-text place name (e.g. "Carter Road, Bandra") into
 // { lat, lng } coordinates using OpenStreetMap's free Nominatim service.
 // If the caller already passes coordinates as "lat,lng", we use those directly.
+// src/services/geocodeService.js
 exports.geocode = async (query) => {
   const coordMatch = query.trim().match(/^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/);
   if (coordMatch) {
@@ -13,7 +14,14 @@ exports.geocode = async (query) => {
   }
 
   const resp = await axios.get(NOMINATIM_URL, {
-    params: { q: query, format: 'json', limit: 1 },
+    params: {
+      q: query,
+      format: 'json',
+      limit: 1,
+      countrycodes: 'in',
+      viewbox: '72.7,19.3,73.1,18.85',
+      bounded: 1,
+    },
     headers: { 'User-Agent': 'NeuroRoute-Student-Project/1.0' },
   });
 
