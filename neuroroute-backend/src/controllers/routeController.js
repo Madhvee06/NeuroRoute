@@ -122,11 +122,5 @@ exports.reevaluateRoute = async (req, res) => {
 };
 
 // GET /api/routes/history (protected)
-exports.getHistory = async (req, res) => {
-  try {
-    const journeys = await Journey.find({ user: req.user.id })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .select('sourceText destinationText sensoryScore travelTimeSeconds distanceMeters createdAt');
-    res.json({ journeys });
+
 
