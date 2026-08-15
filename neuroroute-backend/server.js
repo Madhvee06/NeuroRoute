@@ -9,7 +9,7 @@ const placesRoutes = require('./src/routes/placesRoutes');
 const preferencesRoutes = require('./src/routes/preferencesRoutes');
 const feedbackRoutes = require('./src/routes/feedbackRoutes');
 const reportsRoutes = require('./src/routes/reportsRoutes');
-
+const trafficRoutes = require('./src/routes/trafficRoutes');
 const app = express();
 
 app.use(cors());
@@ -35,6 +35,7 @@ app.use('/api/places', placesRoutes);
 app.use('/api/preferences', preferencesRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/traffic', trafficRoutes);
 
 // 404 handler
 app.use((req, res) => {

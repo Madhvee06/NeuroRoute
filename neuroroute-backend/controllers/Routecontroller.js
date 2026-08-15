@@ -1,4 +1,4 @@
-const Journey = require('../models/Journey');
+const pool = require('../config/db');
 const { geocode } = require('../services/geocodeService');
 const { getRoutes } = require('../services/osrmService');
 const { getWeightsForProfile, scoreRoute } = require('../services/sensoryScore');
@@ -20,19 +20,6 @@ function buildScoredRoutes(routes, weights) {
     .sort((a, b) => a.sensoryScore - b.sensoryScore);
 }
 
-// Mongoose stores preferences as camelCase (avoidCrowds, avoidNoise, ...)
-// while the sensory scoring engine expects snake_case keys - this bridges the two.
-function toSnakeCasePreferences(prefs = {}) {
-  return {
-    avoid_crowds: prefs.avoidCrowds,
-    avoid_noise: prefs.avoidNoise,
-    avoid_bright_lights: prefs.avoidBrightLights,
-    avoid_construction: prefs.avoidConstruction,
-    prefer_parks: prefs.preferParks,
-    prefer_safe_routes: prefs.preferSafeRoutes,
-  };
-}
-
 // POST /api/routes/plan
 // Body: { source, destination, profile, preferences }
 // Works for guests too; if a Bearer token is present (req.user), the
@@ -49,7 +36,7 @@ exports.planRoute = async (req, res) => {
     const destCoords = await geocode(destination);
 
     const rawRoutes = await getRoutes(sourceCoords, destCoords);
-    const weights = getWeightsForProfile(profile, toSnakeCasePreferences(preferences || {}));
+    const weights = getWeightsForProfile(profile, preferences || {});
     const scoredRoutes = buildScoredRoutes(rawRoutes, weights);
 
     const best = scoredRoutes[0];
@@ -64,19 +51,26 @@ exports.planRoute = async (req, res) => {
 
     let journeyId = null;
     if (req.user) {
-      const journey = await Journey.create({
-        user: req.user.id,
-        sourceText: source,
-        destinationText: destination,
-        sourceLat: sourceCoords.lat,
-        sourceLng: sourceCoords.lng,
-        destinationLat: destCoords.lat,
-        destinationLng: destCoords.lng,
-        sensoryScore: best.sensoryScore,
-        travelTimeSeconds: best.durationSeconds,
-        distanceMeters: best.distanceMeters,
-      });
-      journeyId = journey._id;
+      const result = await pool.query(
+        `INSERT INTO journeys
+           (user_id, source_text, destination_text, source_lat, source_lng,
+            destination_lat, destination_lng, sensory_score, travel_time_seconds, distance_meters)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id`,
+        [
+          req.user.id,
+          source,
+          destination,
+          sourceCoords.lat,
+          sourceCoords.lng,
+          destCoords.lat,
+          destCoords.lng,
+          best.sensoryScore,
+          best.durationSeconds,
+          best.distanceMeters,
+        ]
+      );
+      journeyId = result.rows[0].id;
     }
 
     res.json({
@@ -106,7 +100,7 @@ exports.reevaluateRoute = async (req, res) => {
   try {
     const destCoords = await geocode(destination);
     const rawRoutes = await getRoutes({ lat: currentLat, lng: currentLng }, destCoords);
-    const weights = getWeightsForProfile(profile, toSnakeCasePreferences(preferences || {}));
+    const weights = getWeightsForProfile(profile, preferences || {});
     const scoredRoutes = buildScoredRoutes(rawRoutes, weights);
 
     res.json({
@@ -124,11 +118,12 @@ exports.reevaluateRoute = async (req, res) => {
 // GET /api/routes/history (protected)
 exports.getHistory = async (req, res) => {
   try {
-    const journeys = await Journey.find({ user: req.user.id })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .select('sourceText destinationText sensoryScore travelTimeSeconds distanceMeters createdAt');
-    res.json({ journeys });
+    const result = await pool.query(
+      `SELECT id, source_text, destination_text, sensory_score, travel_time_seconds, distance_meters, created_at
+       FROM journeys WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [req.user.id]
+    );
+    res.json({ journeys: result.rows });
   } catch (err) {
     console.error('History fetch error:', err.message);
     res.status(500).json({ error: 'Could not fetch journey history' });

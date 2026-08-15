@@ -32,6 +32,10 @@ import { API_URL } from '../config/api';
 // the initial load is handled by calling a JS function already
 // defined inside the page (`selectRoute`) via injectJavaScript,
 // rather than re-rendering native map components.
+//
+// NEW: live traffic — fetched from OUR backend's /api/traffic proxy
+// (never TomTom directly, so the API key never ships inside the app).
+// See the trafficInfo state + useEffect below.
 // ---------------------------------------------------------------
 
 const ROUTE_LINE_COLORS = [COLORS.primary, '#B08968', '#8AA6C1'];
@@ -174,6 +178,7 @@ export default function RouteOptionsScreen({ navigation, route }) {
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [trafficInfo, setTrafficInfo] = useState(null); // NEW — live traffic near the recommended route
 
   const fetchRoutes = async () => {
     setLoading(true);
@@ -224,6 +229,25 @@ console.log(
   useEffect(() => {
     fetchRoutes();
   }, []);
+
+  // NEW — fetch live traffic for the recommended route's starting
+  // point, once routes are actually loaded. Calls OUR backend's
+  // /api/traffic proxy, never TomTom directly (keeps the API key
+  // server-side, out of the app bundle).
+  useEffect(() => {
+    if (routes.length === 0) return;
+
+    const recommended = routes[0];
+    const firstPoint = recommended.geometry?.coordinates?.[0]; // [lng, lat]
+    if (!firstPoint) return;
+
+    const [lng, lat] = firstPoint;
+
+    fetch(`${API_URL}/api/traffic?lat=${lat}&lng=${lng}`)
+      .then((res) => res.json())
+      .then((data) => setTrafficInfo(data))
+      .catch((err) => console.log('Traffic fetch failed:', err.message));
+  }, [routes]);
 
   // Map HTML only needs to be rebuilt when the route list itself
   // changes (i.e. after a fresh fetch) — NOT on every selection tap.
@@ -311,6 +335,12 @@ console.log(
                 {routes.length} route{routes.length !== 1 ? 's' : ''} found ·
                 tap a route to preview it on the map
               </Text>
+
+              {trafficInfo && (
+                <Text style={[styles.metaText, { marginBottom: 12 }]}>
+                  Live traffic near start: {Math.round(trafficInfo.congestion * 100)}% congested
+                </Text>
+              )}
 
               {routes.map((r, index) => {
                 const isRecommended = r.isRecommended;
