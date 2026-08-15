@@ -9,12 +9,13 @@ import ProfileSelectionScreen from '../screens/ProfileSelectionScreen';
 import PreferencesScreen from '../screens/PreferencesScreen';
 import HomeScreen from '../screens/HomeScreen';
 import RouteOptionsScreen from '../screens/RouteOptionsScreen';
+import NavigationScreen from '../screens/NavigationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 
 // ---------------------------------------------------------------
 // NeuroRoute — App Navigator
 // Flow: Welcome -> Login/Signup -> (Signup only) ProfileSelection
-//       -> Preferences -> Home
+//       -> Preferences -> Home -> RouteOptions -> Navigation
 // ---------------------------------------------------------------
 
 const Stack = createNativeStackNavigator();
@@ -35,8 +36,8 @@ export default function AppNavigator() {
         <Stack.Screen name="Preferences" component={PreferencesScreen} />
         <Stack.Screen name="Home" component={HomeScreen} />
         <Stack.Screen name="RouteOptions" component={RouteOptionsScreen} />
+        <Stack.Screen name="Navigation" component={NavigationScreen} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
-        {/* Add RouteDetail here once you build it */}
       </Stack.Navigator>
     </NavigationContainer>
   );

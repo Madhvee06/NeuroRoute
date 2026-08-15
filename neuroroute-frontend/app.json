@@ -7,7 +7,10 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "NeuroRoute needs your location to guide you turn-by-turn during navigation and to suggest comfortable routes nearby."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -15,8 +18,20 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "NeuroRoute needs your location to guide you turn-by-turn during navigation."
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     }

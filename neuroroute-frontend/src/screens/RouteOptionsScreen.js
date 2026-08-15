@@ -32,11 +32,7 @@ import { API_URL } from '../config/api';
 // the initial load is handled by calling a JS function already
 // defined inside the page (`selectRoute`) via injectJavaScript,
 // rather than re-rendering native map components.
-//
-// NEW: live traffic — fetched from OUR backend's /api/traffic proxy
-// (never TomTom directly, so the API key never ships inside the app).
-// See the trafficInfo state + useEffect below.
-// ---------------------------------------------------------------
+
 
 const ROUTE_LINE_COLORS = [COLORS.primary, '#B08968', '#8AA6C1'];
 

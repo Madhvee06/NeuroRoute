@@ -11,14 +11,17 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { COLORS } from '../theme';
 import styles from './HomeScreen.styles';
 import { API_URL } from '../config/api';
 
-// Bandra Reclamation area, Mumbai — used as a stand-in "current location"
-// until the app requests real GPS coordinates with expo-location.
+// Bandra Reclamation area, Mumbai — last-resort fallback ONLY if the
+// user denies location access or GPS/reverse-geocoding fails outright.
+// Real current location (below) is now the primary path.
 const FALLBACK_LAT = 19.045;
 const FALLBACK_LNG = 72.8258;
+const FALLBACK_LABEL = 'Bandra Reclamation, Mumbai (default)';
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -30,7 +33,8 @@ export default function HomeScreen({ navigation }) {
   const [places, setPlaces] = useState([]);
   const [placesLoading, setPlacesLoading] = useState(true);
 
-  // Load the logged-in user's name/profile every time this screen is focused
+  const [locating, setLocating] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       (async () => {
@@ -48,7 +52,6 @@ export default function HomeScreen({ navigation }) {
     }, [])
   );
 
-  // Fetch nearby quiet places from the backend on mount
   useEffect(() => {
     (async () => {
       try {
@@ -67,12 +70,55 @@ export default function HomeScreen({ navigation }) {
     })();
   }, []);
 
-  // Navigate to RouteOptionsScreen instead of fetching + showing inline.
-  // RouteOptionsScreen owns the actual /api/routes/plan call and map.
+  // Requests GPS permission, gets the phone's real current coordinates,
+  // then reverse-geocodes them into a readable address via Nominatim
+  // (free, no API key) so the rest of the app — which expects a plain
+  // address STRING for `source` — doesn't need any backend changes.
+  const handleUseCurrentLocation = async () => {
+    setLocating(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setSource(FALLBACK_LABEL);
+        setLocating(false);
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const { latitude, longitude } = position.coords;
+
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=16`,
+        {
+          headers: {
+            // Nominatim's usage policy asks for a descriptive User-Agent;
+            // fetch() on React Native may not always honor custom
+            // User-Agent, but this is included as a good-faith attempt.
+            'User-Agent': 'NeuroRoute-App/1.0',
+          },
+        }
+      );
+      const data = await res.json();
+
+      const readableAddress =
+        data.display_name ||
+        `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+
+      setSource(readableAddress);
+    } catch (err) {
+      console.warn('Could not get current location:', err.message);
+      setSource(FALLBACK_LABEL);
+    } finally {
+      setLocating(false);
+    }
+  };
+
   const handleFindRoute = () => {
     if (!destination) return;
     navigation?.navigate('RouteOptions', {
-      source: source || `${FALLBACK_LAT},${FALLBACK_LNG}`,
+      source: source || FALLBACK_LABEL,
       destination,
       profile: userProfile,
       preferences: { avoidCrowds: true, avoidNoise: true },
@@ -119,12 +165,26 @@ export default function HomeScreen({ navigation }) {
             <View style={[styles.dot, { backgroundColor: COLORS.primary }]} />
             <TextInput
               style={styles.input}
-              placeholder="Current location (leave blank to use default)"
+              placeholder="Tap 'Use current location' or type a starting point"
               placeholderTextColor={COLORS.textMuted}
               value={source}
               onChangeText={setSource}
             />
           </View>
+
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginLeft: 20 }}
+            onPress={handleUseCurrentLocation}
+            disabled={locating}
+          >
+            {locating ? (
+              <ActivityIndicator size="small" color={COLORS.primary} />
+            ) : (
+              <Text style={{ fontSize: 12, color: COLORS.primary, fontWeight: '600' }}>
+                📍 Use current location
+              </Text>
+            )}
+          </TouchableOpacity>
 
           <View style={styles.inputDivider} />
 
