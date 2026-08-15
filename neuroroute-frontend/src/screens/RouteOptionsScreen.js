@@ -1,3 +1,4 @@
+//routeOptionsscreen.js
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -17,22 +18,24 @@ import { API_URL } from '../config/api';
 // ---------------------------------------------------------------
 // NeuroRoute — Route Options Screen (pure OpenStreetMap via Leaflet)
 //
-// Same backend contract as before:
+// Backend contract:
 //   POST /api/routes/plan
 //   body: { source, destination, profile, preferences }
 //   response: { recommendedRoute, alternativeRoutes, explanation,
 //               nearbyQuietPlaces, journeyId }
+//   Each route includes BOTH durationSecondsDriving and
+//   durationSecondsWalking, so switching modes on this screen is
+//   instant — no refetch required. Each route also now includes
+//   `steps` (turn-by-turn), used by NavigationScreen.
 //
-// Map layer changed: react-native-maps (Google Maps) -> WebView
-// running Leaflet.js against real OpenStreetMap tiles. No API key,
-// no native map SDK — matches the rest of the OSM stack already
-// used on the backend (Nominatim, Overpass, OSRM).
-//
-// Because a WebView's HTML only loads once, route selection after
-// the initial load is handled by calling a JS function already
-// defined inside the page (`selectRoute`) via injectJavaScript,
-// rather than re-rendering native map components.
-
+// FIX (this version): route `id` values from the backend start at 0
+// (assigned as array index before sorting by score), so the very
+// first/recommended route can legitimately have id === 0. Any check
+// like `!selectedId` or `disabled={!selectedId}` treats 0 as falsy
+// and silently breaks — e.g. the "Start this route" button looked
+// like it did nothing when the selected route's id was 0. Every such
+// check below now explicitly compares against null/undefined instead.
+// ---------------------------------------------------------------
 
 const ROUTE_LINE_COLORS = [COLORS.primary, '#B08968', '#8AA6C1'];
 
@@ -48,16 +51,26 @@ function fallbackExplanation(score) {
   return 'This route has a higher sensory load than the recommended option.';
 }
 
+// Driving durations stay in minutes (usually short). Walking durations
+// can run into hours for longer distances, so format those as h/m.
+function formatDuration(seconds, mode) {
+  const totalMinutes = Math.round(seconds / 60);
+
+  if (mode === 'walking' && totalMinutes >= 60) {
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  return `${totalMinutes} min`;
+}
+
 // OSRM/GeoJSON gives coordinates as [lng, lat]. Leaflet wants [lat, lng].
 function toLatLngs(geometry) {
   if (!geometry?.coordinates) return [];
   return geometry.coordinates.map(([lng, lat]) => [lat, lng]);
 }
 
-// Builds the full HTML page loaded into the WebView, once, on first
-// render. Route geometries + colors are baked in at build time;
-// which route is "selected" afterwards is controlled at runtime via
-// injectJavaScript calling window.selectRoute(id).
 function buildMapHtml(routes) {
   const routesData = routes.map((r, index) => ({
     id: r.id,
@@ -95,13 +108,8 @@ body{
   const map = L.map('map', { zoomControl: false });
   window.map = map;
 
-  // Always give the map an initial view right away, so tiles start
-  // loading immediately. Don't rely solely on fitBounds() from route
-  // data below — if coordinates are missing/malformed, fitBounds()
-  // can silently fail and leave the map with no view at all (grey box).
   map.setView([20.5937, 78.9629], 5); // safe fallback (India-wide view)
 
-// Force Leaflet to recalculate the map size after rendering
 setTimeout(() => {
     map.invalidateSize();
 }, 300);
@@ -111,8 +119,6 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
-    // Draw every route, dim by default; keep references so we can
-    // restyle the selected one later without redrawing everything.
     const lines = {};
     routesData.forEach((r) => {
       if (r.coords.length === 0) {
@@ -126,8 +132,6 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     let startMarker = null;
     let endMarker = null;
 
-    // Called from React Native via injectJavaScript whenever the
-    // user taps a different route card.
     window.selectRoute = function (id) {
       Object.keys(lines).forEach((key) => {
         const isSelected = String(key) === String(id);
@@ -154,7 +158,6 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }, 100);
     };
 
-    // Select the first route (recommended) as soon as the page loads
     if (routesData.length > 0) {
       window.selectRoute(routesData[0].id);
     }
@@ -175,6 +178,10 @@ export default function RouteOptionsScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [trafficInfo, setTrafficInfo] = useState(null); // NEW — live traffic near the recommended route
+  
+  // Display-only toggle — both durations already come back in one
+  // response, so switching this never triggers a refetch.
+  const [travelMode, setTravelMode] = useState('driving'); // 'driving' | 'walking'
 
   const fetchRoutes = async () => {
     setLoading(true);
@@ -189,10 +196,10 @@ export default function RouteOptionsScreen({ navigation, route }) {
         },
         body: JSON.stringify({ source, destination, profile, preferences }),
       });
+      
 
       const data = await res.json();
-
-      console.log("ROUTE RESPONSE");
+            console.log("ROUTE RESPONSE");
 console.log(JSON.stringify(data, null, 2));
       console.log("FULL RESPONSE:", JSON.stringify(data, null, 2));
 
@@ -212,7 +219,7 @@ console.log(
         ...(data.alternativeRoutes || []).map((r) => ({ ...r, isRecommended: false })),
       ];
 
-      setRoutes(combined);
+          setRoutes(combined);
       setTopExplanation(data.explanation || '');
       if (combined.length > 0) setSelectedId(combined[0].id);
     } catch (err) {
@@ -226,32 +233,25 @@ console.log(
     fetchRoutes();
   }, []);
 
-  // NEW — fetch live traffic for the recommended route's starting
-  // point, once routes are actually loaded. Calls OUR backend's
-  // /api/traffic proxy, never TomTom directly (keeps the API key
-  // server-side, out of the app bundle).
   useEffect(() => {
-    if (routes.length === 0) return;
-
-    const recommended = routes[0];
-    const firstPoint = recommended.geometry?.coordinates?.[0]; // [lng, lat]
-    if (!firstPoint) return;
-
-    const [lng, lat] = firstPoint;
-
-    fetch(`${API_URL}/api/traffic?lat=${lat}&lng=${lng}`)
-      .then((res) => res.json())
-      .then((data) => setTrafficInfo(data))
-      .catch((err) => console.log('Traffic fetch failed:', err.message));
-  }, [routes]);
-
-  // Map HTML only needs to be rebuilt when the route list itself
-  // changes (i.e. after a fresh fetch) — NOT on every selection tap.
+      if (routes.length === 0) return;
+  
+      const recommended = routes[0];
+      const firstPoint = recommended.geometry?.coordinates?.[0]; // [lng, lat]
+      if (!firstPoint) return;
+  
+      const [lng, lat] = firstPoint;
+  
+      fetch(`${API_URL}/api/traffic?lat=${lat}&lng=${lng}`)
+        .then((res) => res.json())
+        .then((data) => setTrafficInfo(data))
+        .catch((err) => console.log('Traffic fetch failed:', err.message));
+    }, [routes]);
+  
   const mapHtml = useMemo(() => (routes.length > 0 ? buildMapHtml(routes) : null), [routes]);
 
-  // Tell the already-loaded map which route to highlight, without
-  // reloading the whole WebView.
   useEffect(() => {
+    // Already correct: uses != null, not a truthy check, so id 0 works fine here.
     if (selectedId != null && webViewRef.current) {
       webViewRef.current.injectJavaScript(
         `window.selectRoute(${JSON.stringify(selectedId)}); true;`
@@ -264,8 +264,22 @@ console.log(
   };
 
   const handleStartRoute = () => {
+    // FIX: was `routes.find((r) => r.id === selectedId)` guarded only by
+    // the (buggy) `disabled={!selectedId}` below — if no route is found
+    // (shouldn't normally happen once selectedId is set), fail safely
+    // with an early return instead of navigating with undefined data.
     const selectedRoute = routes.find((r) => r.id === selectedId);
-    navigation?.navigate('RouteDetail', { selectedRoute });
+    if (!selectedRoute) return;
+    // destination/profile/preferences are passed through so
+    // NavigationScreen can call POST /api/routes/reevaluate during
+    // live navigation (the "Agentic AI" monitoring/reroute loop).
+    navigation?.navigate('Navigation', {
+      selectedRoute,
+      travelMode,
+      destination,
+      profile,
+      preferences,
+    });
   };
 
   return (
@@ -326,6 +340,44 @@ console.log(
 
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 8 }]}>
             <View style={styles.sheetHandle} />
+
+            {/* Drive / Walk toggle — purely local state, both durations
+                are already in `routes`, so this never refetches. */}
+            <View style={styles.modeToggleRow}>
+              <TouchableOpacity
+                style={[
+                  styles.modeToggleButton,
+                  travelMode === 'driving' && styles.modeToggleButtonActive,
+                ]}
+                onPress={() => setTravelMode('driving')}
+              >
+                <Text
+                  style={[
+                    styles.modeToggleText,
+                    travelMode === 'driving' && styles.modeToggleTextActive,
+                  ]}
+                >
+                  Drive
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modeToggleButton,
+                  travelMode === 'walking' && styles.modeToggleButtonActive,
+                ]}
+                onPress={() => setTravelMode('walking')}
+              >
+                <Text
+                  style={[
+                    styles.modeToggleText,
+                    travelMode === 'walking' && styles.modeToggleTextActive,
+                  ]}
+                >
+                  Walk
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.sheetSummary}>
                 {routes.length} route{routes.length !== 1 ? 's' : ''} found ·
@@ -333,16 +385,18 @@ console.log(
               </Text>
 
               {trafficInfo && (
-                <Text style={[styles.metaText, { marginBottom: 12 }]}>
+               <Text style={[styles.metaText, { marginBottom: 12 }]}>
                   Live traffic near start: {Math.round(trafficInfo.congestion * 100)}% congested
                 </Text>
-              )}
+             )}
 
               {routes.map((r, index) => {
                 const isRecommended = r.isRecommended;
                 const isSelected = r.id === selectedId;
                 const distanceKm = Math.round((r.distanceMeters / 1000) * 10) / 10;
-                const durationMin = Math.round(r.durationSeconds / 60);
+                const durationSeconds =
+                  travelMode === 'walking' ? r.durationSecondsWalking : r.durationSecondsDriving;
+                const durationLabel = formatDuration(durationSeconds, travelMode);
 
                 return (
                   <TouchableOpacity
@@ -377,9 +431,13 @@ console.log(
                     </View>
 
                     <View style={styles.metaRow}>
-                      <Text style={styles.metaText}>{durationMin} min</Text>
+                      <Text style={styles.metaText}>{durationLabel}</Text>
                       <Text style={styles.metaDot}>·</Text>
                       <Text style={styles.metaText}>{distanceKm} km</Text>
+                      <Text style={styles.metaDot}>·</Text>
+                      <Text style={styles.metaText}>
+                        {travelMode === 'walking' ? 'walking' : 'driving'}
+                      </Text>
                     </View>
 
                     <Text style={styles.explanationText}>
@@ -392,7 +450,7 @@ console.log(
               <TouchableOpacity
                 style={styles.startButton}
                 onPress={handleStartRoute}
-                disabled={!selectedId}
+                disabled={selectedId == null}
               >
                 <Text style={styles.startButtonText}>Start this route</Text>
               </TouchableOpacity>
