@@ -189,4 +189,28 @@ map: {
     fontSize: 15,
     fontWeight: '600',
   },
+  modeToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.background,
+    borderRadius: RADIUS.button,
+    padding: 4,
+    marginBottom: 12,
+  },
+  modeToggleButton: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: RADIUS.button - 4,
+    alignItems: 'center',
+  },
+  modeToggleButtonActive: {
+    backgroundColor: COLORS.primary,
+  },
+  modeToggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.textMuted,
+  },
+  modeToggleTextActive: {
+    color: '#FFFFFF',
+  },
 });

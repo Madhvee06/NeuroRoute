@@ -57,51 +57,147 @@ def random_point():
 
 def fetch_traffic(lat, lng):
     """Returns a 0-1 congestion score: 0 = free flowing, 1 = fully jammed."""
+
     key = (lat, lng)
+
     if key in _traffic_cache:
         return _traffic_cache[key]
 
     try:
+        if not TOMTOM_API_KEY:
+            raise RuntimeError("TOMTOM_API_KEY is missing from .env")
+
         url = "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json"
-        params = {"key": TOMTOM_API_KEY, "point": f"{lat},{lng}"}
-        res = requests.get(url, params=params, timeout=5)
+
+        params = {
+            "key": TOMTOM_API_KEY,
+            "point": f"{lat},{lng}"
+        }
+
+        res = requests.get(
+            url,
+            params=params,
+            timeout=(5, 10)
+        )
+
+        res.raise_for_status()
+
         data = res.json()
+
         current_speed = data["flowSegmentData"]["currentSpeed"]
         free_flow_speed = data["flowSegmentData"]["freeFlowSpeed"]
-        congestion = 1 - (current_speed / free_flow_speed) if free_flow_speed > 0 else 0.5
+
+        congestion = (
+            1 - (current_speed / free_flow_speed)
+            if free_flow_speed > 0
+            else 0.5
+        )
+
         congestion = max(0, min(1, congestion))
+
+        print(
+            f"  Traffic OK: "
+            f"current={current_speed}, "
+            f"free-flow={free_flow_speed}, "
+            f"congestion={congestion:.3f}"
+        )
+
+    except requests.exceptions.Timeout:
+        print(f"  Traffic API timeout for {lat},{lng} — using random fallback")
+        congestion = random.uniform(0, 1)
+
+    except requests.exceptions.SSLError as e:
+        print(f"  Traffic SSL error for {lat},{lng}: {e}")
+        print("  Using random fallback")
+        congestion = random.uniform(0, 1)
+
+    except requests.exceptions.RequestException as e:
+        print(f"  Traffic API request failed for {lat},{lng}: {e}")
+        print("  Using random fallback")
+        congestion = random.uniform(0, 1)
+
     except Exception as e:
-        print(f"  traffic API failed for {lat},{lng}: {e} — using random fallback")
+        print(f"  Traffic API failed for {lat},{lng}: {e}")
+        print("  Using random fallback")
         congestion = random.uniform(0, 1)
 
     _traffic_cache[key] = congestion
-    time.sleep(0.2)  # be polite to the free tier
+
+    time.sleep(0.2)
+
     return congestion
 
 
 def fetch_weather(lat, lng):
     """Returns a 0-1 'weather severity' score: 0 = clear, 1 = severe."""
     key = (lat, lng)
+
     if key in _weather_cache:
         return _weather_cache[key]
 
     try:
+        if not OPENWEATHER_API_KEY:
+            raise RuntimeError("OPENWEATHER_API_KEY is missing from .env")
+
         url = "https://api.openweathermap.org/data/2.5/weather"
-        params = {"lat": lat, "lon": lng, "appid": OPENWEATHER_API_KEY}
-        res = requests.get(url, params=params, timeout=5)
-        data = res.json()
-        condition = data["weather"][0]["main"].lower()  # e.g. "rain", "clear", "fog"
-        severity_map = {
-            "clear": 0.05, "clouds": 0.2, "mist": 0.4, "fog": 0.6,
-            "drizzle": 0.5, "rain": 0.7, "thunderstorm": 0.9, "snow": 0.8,
+
+        params = {
+            "lat": lat,
+            "lon": lng,
+            "appid": OPENWEATHER_API_KEY
         }
+
+        res = requests.get(
+            url,
+            params=params,
+            timeout=(5, 10)
+        )
+
+        # Raise an error for HTTP errors such as 401, 403, 429, 500
+        res.raise_for_status()
+
+        data = res.json()
+
+        condition = data["weather"][0]["main"].lower()
+
+        severity_map = {
+            "clear": 0.05,
+            "clouds": 0.2,
+            "mist": 0.4,
+            "fog": 0.6,
+            "drizzle": 0.5,
+            "rain": 0.7,
+            "thunderstorm": 0.9,
+            "snow": 0.8,
+        }
+
         severity = severity_map.get(condition, 0.3)
+
+        print(f"  Weather OK: {condition} -> {severity}")
+
+    except requests.exceptions.Timeout:
+        print(f"  Weather API timeout for {lat},{lng} — using random fallback")
+        severity = random.uniform(0, 1)
+
+    except requests.exceptions.SSLError as e:
+        print(f"  Weather SSL error for {lat},{lng}: {e}")
+        print("  Using random fallback")
+        severity = random.uniform(0, 1)
+
+    except requests.exceptions.RequestException as e:
+        print(f"  Weather API request failed for {lat},{lng}: {e}")
+        print("  Using random fallback")
+        severity = random.uniform(0, 1)
+
     except Exception as e:
-        print(f"  weather API failed for {lat},{lng}: {e} — using random fallback")
+        print(f"  Weather API failed for {lat},{lng}: {e}")
+        print("  Using random fallback")
         severity = random.uniform(0, 1)
 
     _weather_cache[key] = severity
+
     time.sleep(0.2)
+
     return severity
 
 
@@ -134,7 +230,12 @@ def generate_row():
         + weights["construction"] * construction
         + weights["weather"] * weather
     )
-    score = min(100, round((raw_score / 8.0) * 100, 2))
+    max_weight = sum(weights.values())
+
+    score = min(
+    100,
+    round((raw_score / max_weight) * 100, 2)
+)
     label = score_to_label(score)
 
     return {

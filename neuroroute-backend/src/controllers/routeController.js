@@ -4,17 +4,36 @@ const { getRoutes } = require('../services/osrmService');
 const { getWeightsForProfile, scoreRoute } = require('../services/sensoryScore');
 const { findNearbyQuietPlaces } = require('../services/overpassService');
 
+// Average pedestrian walking speed, used to ESTIMATE walking duration
+// from the same driving-route geometry/distance. We deliberately do
+// NOT call OSRM's walking profile separately — a walking-optimized
+// route can be a genuinely different path (different roads, different
+// alternative count/order) than the driving one, which would break
+// the 1-to-1 match between what's drawn on the map (driving geometry)
+// and the walking duration shown for it. This keeps map, sensory
+// score, and both duration numbers all describing the exact same path.
+const WALKING_SPEED_MPS = 1.4; // ~5 km/h
+
 function buildScoredRoutes(routes, weights) {
   return routes
     .map((route, idx) => {
       const { totalScore, segments } = scoreRoute(route.geometry, weights);
+
+      // OSRM returns turn-by-turn instructions per leg when steps=true
+      // is passed (see osrmService.js). Flatten every leg's steps into
+      // one array — NavigationScreen expects this field directly on
+      // each route.
+      const steps = (route.legs || []).flatMap((leg) => leg.steps || []);
+
       return {
         id: idx,
         distanceMeters: Math.round(route.distance),
-        durationSeconds: Math.round(route.duration),
+        durationSecondsDriving: Math.round(route.duration), // real, from OSRM
+        durationSecondsWalking: Math.round(route.distance / WALKING_SPEED_MPS), // estimated
         sensoryScore: totalScore,
         geometry: route.geometry,
         segments,
+        steps,
       };
     })
     .sort((a, b) => a.sensoryScore - b.sensoryScore);
@@ -73,7 +92,7 @@ exports.planRoute = async (req, res) => {
         destinationLat: destCoords.lat,
         destinationLng: destCoords.lng,
         sensoryScore: best.sensoryScore,
-        travelTimeSeconds: best.durationSeconds,
+        travelTimeSeconds: best.durationSecondsDriving, // was best.durationSeconds — field renamed above
         distanceMeters: best.distanceMeters,
       });
       journeyId = journey._id;
@@ -81,6 +100,8 @@ exports.planRoute = async (req, res) => {
 
     res.json({
       journeyId,
+      sourceCoords,
+      destCoords,
       recommendedRoute: best,
       alternativeRoutes: alternatives,
       nearbyQuietPlaces,
