@@ -7,4 +7,4 @@
 //   Mac:     run `ipconfig getifaddr en0` in terminal
 // Keep the port as 5000 unless you changed PORT in the backend's .env
 // ---------------------------------------------------------------
-export const API_URL = 'http://192.168.1.106:5000'; // <-- EDIT THIS to your IP
+export const API_URL = 'http://192.168.1.102:5000'; // <-- EDIT THIS to your IP

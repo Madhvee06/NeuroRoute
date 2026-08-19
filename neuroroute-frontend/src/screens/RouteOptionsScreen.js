@@ -246,7 +246,8 @@ console.log(
         .then((res) => res.json())
         .then((data) => setTrafficInfo(data))
         .catch((err) => console.log('Traffic fetch failed:', err.message));
-    }, [routes]);
+    }, [routes]); 
+    
   
   const mapHtml = useMemo(() => (routes.length > 0 ? buildMapHtml(routes) : null), [routes]);
 
@@ -384,11 +385,11 @@ console.log(
                 tap a route to preview it on the map
               </Text>
 
-              {trafficInfo && (
-               <Text style={[styles.metaText, { marginBottom: 12 }]}>
-                  Live traffic near start: {Math.round(trafficInfo.congestion * 100)}% congested
-                </Text>
-             )}
+              {trafficInfo && ( 
+              <Text style={[styles.metaText, { marginBottom: 12 }]}>
+                 Live traffic near start: {Math.round(trafficInfo.congestion * 100)}% congested
+               </Text>
+             )} 
 
               {routes.map((r, index) => {
                 const isRecommended = r.isRecommended;

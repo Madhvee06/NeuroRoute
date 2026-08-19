@@ -1,16 +1,3 @@
-"""
-NeuroRoute — Agentic AI Decision Engine
-
-Matches Section 7(f) of the synopsis exactly:
-  - Compares all possible routes
-  - Evaluates the sensory score of each route
-  - Considers user preferences and profile
-  - Uses Machine Learning predictions
-  - Selects the most suitable route by balancing time, safety, comfort
-  - Explains the recommendation (this is the ONLY step that uses the LLM)
-
-Run: uvicorn main:app --port 8000 --reload
-"""
 
 from typing import TypedDict, List, Dict, Any
 from fastapi import FastAPI
@@ -29,7 +16,7 @@ bundle = joblib.load("comfort_model.pkl")
 rf_model = bundle["model"]
 FEATURE_COLS = bundle["feature_cols"]
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)  # only used for the explanation step
+llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0)  # only used for the explanation step
 
 
 # ---------------------------------------------------------------
@@ -109,7 +96,7 @@ def explain_decision(state: AgentState) -> AgentState:
         f"Its sensory score is {best['sensoryScore']} and the ML model predicts "
         f"comfort level: {best.get('predictedComfort')}. "
         f"User preferences: {state['preferences']}. "
-        "In 1-2 short, warm sentences, explain to the user why this route was chosen. "
+        "In 1-2 short, warm sentences, explain to the user in simple words why this route was chosen. "
         "Do not mention 'ML model' or technical terms — speak plainly."
     )
     response = llm.invoke(prompt)

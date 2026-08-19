@@ -1,8 +1,11 @@
+const axios = require('axios');
 const Journey = require('../models/Journey');
 const { geocode } = require('../services/geocodeService');
 const { getRoutes } = require('../services/osrmService');
 const { getWeightsForProfile, scoreRoute } = require('../services/sensoryScore');
 const { findNearbyQuietPlaces } = require('../services/overpassService');
+
+const AGENT_URL = process.env.AGENT_URL || 'http://localhost:8000/agent/plan';
 
 // Average pedestrian walking speed, used to ESTIMATE walking duration
 // from the same driving-route geometry/distance. We deliberately do
@@ -13,6 +16,23 @@ const { findNearbyQuietPlaces } = require('../services/overpassService');
 // and the walking duration shown for it. This keeps map, sensory
 // score, and both duration numbers all describing the exact same path.
 const WALKING_SPEED_MPS = 1.4; // ~5 km/h
+
+// The agent's ML model was trained on 0-1 scale factors (see generate_data.py),
+// but sensoryScore.js's readEnvironmentalFactors() produces 0-10 scale values.
+// Average each segment's factors into one per-route object AND rescale to 0-1
+// so the Random Forest sees the same range it was trained on.
+function averageFactors(segments) {
+  const keys = ['traffic', 'crowd', 'noise', 'brightness', 'construction', 'weather'];
+  const totals = Object.fromEntries(keys.map((k) => [k, 0]));
+
+  segments.forEach((seg) => {
+    keys.forEach((k) => { totals[k] += seg.factors[k]; });
+  });
+
+  const avg = {};
+  keys.forEach((k) => { avg[k] = (totals[k] / segments.length) / 10; }); // /10 rescales to 0-1
+  return avg;
+}
 
 function buildScoredRoutes(routes, weights) {
   return routes
@@ -33,10 +53,21 @@ function buildScoredRoutes(routes, weights) {
         sensoryScore: totalScore,
         geometry: route.geometry,
         segments,
+        factors: averageFactors(segments), // <-- new: per-route average, 0-1 scale, for the agent
         steps,
       };
     })
     .sort((a, b) => a.sensoryScore - b.sensoryScore);
+}
+
+// main.py checks for lowercase "autistic" | "elderly" | "general", but the
+// frontend/DB use "Autistic User" | "Elderly User" | "General User".
+function toAgentProfile(profile) {
+  if (!profile) return 'general';
+  const p = profile.toLowerCase();
+  if (p.includes('autistic')) return 'autistic';
+  if (p.includes('elderly')) return 'elderly';
+  return 'general';
 }
 
 // Mongoose stores preferences as camelCase (avoidCrowds, avoidNoise, ...)
@@ -81,6 +112,39 @@ exports.planRoute = async (req, res) => {
       console.warn('Could not fetch nearby quiet places:', placesErr.message);
     }
 
+    // --- Agentic AI Decision Engine call ---
+    // Sends every candidate route to the Python/LangGraph agent, which
+    // re-ranks them using the trained Random Forest and writes a plain-
+    // English explanation. If the Python service is down or slow, we
+    // silently fall back to the rule-based result above — the app must
+    // never break because of this call.
+    let agentDecision = null;
+    try {
+      const agentRes = await axios.post(AGENT_URL, {
+        routes: [best, ...alternatives].map((r) => ({
+          id: r.id,
+          sensoryScore: r.sensoryScore,
+          distanceMeters: r.distanceMeters,
+          durationSeconds: r.durationSecondsDriving,
+          factors: r.factors,
+        })),
+        profile: toAgentProfile(profile),
+        preferences: preferences || {},
+      }, { timeout: 30000 });
+      agentDecision = agentRes.data; // { chosenRoute: {...}, explanation: "..." }
+    } catch (err) {
+      console.log('Agent unavailable, falling back to rule-based score:', err.message);
+    }
+
+    // If the agent responded, use ITS chosen route (it may re-rank vs. the
+    // rule-based `best`), matched back to our full route object by id.
+    const allRoutes = [best, ...alternatives];
+    const agentChosenId = agentDecision?.chosenRoute?.id;
+    const recommendedRoute = agentChosenId !== undefined
+      ? (allRoutes.find((r) => r.id === agentChosenId) || best)
+      : best;
+    const alternativeRoutes = allRoutes.filter((r) => r.id !== recommendedRoute.id);
+
     let journeyId = null;
     if (req.user) {
       const journey = await Journey.create({
@@ -91,9 +155,9 @@ exports.planRoute = async (req, res) => {
         sourceLng: sourceCoords.lng,
         destinationLat: destCoords.lat,
         destinationLng: destCoords.lng,
-        sensoryScore: best.sensoryScore,
-        travelTimeSeconds: best.durationSecondsDriving, // was best.durationSeconds — field renamed above
-        distanceMeters: best.distanceMeters,
+        sensoryScore: recommendedRoute.sensoryScore,
+        travelTimeSeconds: recommendedRoute.durationSecondsDriving,
+        distanceMeters: recommendedRoute.distanceMeters,
       });
       journeyId = journey._id;
     }
@@ -102,10 +166,13 @@ exports.planRoute = async (req, res) => {
       journeyId,
       sourceCoords,
       destCoords,
-      recommendedRoute: best,
-      alternativeRoutes: alternatives,
+      recommendedRoute,
+      alternativeRoutes,
       nearbyQuietPlaces,
-      explanation: `This route was chosen for a ${profile || 'General User'} profile because it has the lowest estimated sensory load (score: ${best.sensoryScore}), balancing traffic, crowd density, noise, brightness, construction and weather along the way.`,
+      explanation:
+        agentDecision?.explanation ||
+        `This route was chosen for a ${profile || 'General User'} profile because it has the lowest estimated sensory load (score: ${best.sensoryScore}), balancing traffic, crowd density, noise, brightness, construction and weather along the way.`,
+      agentPowered: !!agentDecision, // shows the examiner whether the agent actually ran
     });
   } catch (err) {
     console.error('Route planning error:', err.message);

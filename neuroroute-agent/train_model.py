@@ -41,7 +41,7 @@ model = RandomForestClassifier(n_estimators=100, random_state=42)
 model.fit(X_train, y_train)
 
 acc = accuracy_score(y_test, model.predict(X_test))
-print(f"Test accuracy: {acc:.2%}  (not the priority right now, just a sanity check)")
+print(f"Test accuracy: {acc:.2%}  ")
 
 joblib.dump({"model": model, "feature_cols": feature_cols}, "comfort_model.pkl")
 print("Saved comfort_model.pkl")
