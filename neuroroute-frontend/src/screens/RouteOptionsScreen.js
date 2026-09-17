@@ -1,4 +1,4 @@
-// routeOptionsscreen.js
+// RouteOptionsScreen.js
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -34,9 +34,33 @@ import { API_URL } from '../config/api';
 // like `!selectedId` or `disabled={!selectedId}` treats 0 as falsy
 // and silently breaks. Every such check below explicitly compares
 // against null/undefined instead.
+//
+// UPDATED (map legibility pass):
+//  1. CAUTION: mapWrap/map in RouteOptionsScreen.styles.js are both
+//     flex:1. This already caused a blank grey box once (Leaflet's
+//     tile layer never fires because Android measures a flex:1
+//     WebView as zero-size). If that resurfaces, the fix already
+//     applied elsewhere in this project is to measure mapWrap via
+//     onLayout and pass explicit pixel {width,height} to the
+//     WebView's style instead of flex.
+//  2. The basemap is a low-noise CARTO "light" OSM style rather
+//     than the default osm.org raster. Same OpenStreetMap data,
+//     far fewer competing labels and POI icons behind the route
+//     lines. NavigationScreen goes one step further and uses the
+//     label-free variant plus blur.
+//  3. `nearbyQuietPlaces` are now drawn on the preview map as soft
+//     green dots (this was the only thing the old standalone
+//     MapScreen.js did that this screen didn't — MapScreen is now
+//     redundant and can be deleted).
 // ---------------------------------------------------------------
 
 const ROUTE_LINE_COLORS = [COLORS.primary, '#B08968', '#8AA6C1'];
+
+// Low-noise OSM basemap. Keep labels here (this is a planning
+// screen — the user needs street names to recognise the area).
+const TILE_URL =
+  'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+const TILE_ATTR = '&copy; OpenStreetMap contributors &copy; CARTO';
 
 function scoreColor(score) {
   if (score <= 35) return COLORS.primary;
@@ -51,23 +75,11 @@ function fallbackExplanation(score) {
 }
 
 // ---------------------------------------------------------------
-// NEW FIX:
 // Backend explanation can be either:
-//
-// 1. A string:
-//    "This is the calmest route."
-//
-// OR
-//
-// 2. An object:
-//    {
-//      type: "...",
-//      text: "This is the calmest route.",
-//      extras: {...}
-//    }
-//
-// React Native <Text> cannot render an object directly,
-// so we extract the `text` property.
+//   1. A string:  "This is the calmest route."
+//   2. An object: { type, text, extras }
+// React Native <Text> cannot render an object directly, so we
+// extract the `text` property.
 // ---------------------------------------------------------------
 function getExplanationText(explanation) {
   if (typeof explanation === 'string') {
@@ -101,7 +113,7 @@ function toLatLngs(geometry) {
   return geometry.coordinates.map(([lng, lat]) => [lat, lng]);
 }
 
-function buildMapHtml(routes) {
+function buildMapHtml(routes, quietPlaces) {
   const routesData = routes.map((r, index) => ({
     id: r.id,
     coords: toLatLngs(r.geometry),
@@ -114,24 +126,27 @@ function buildMapHtml(routes) {
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
   <style>
-    html,
-    body {
+    html, body {
       width: 100%;
       height: 100%;
       margin: 0;
       padding: 0;
       overflow: hidden;
+      background: ${COLORS.background};
     }
 
     #map {
       width: 100vw;
       height: 100vh;
+    }
+
+    .leaflet-control-attribution {
+      font-size: 9px;
+      background: rgba(255, 255, 255, 0.55);
+      color: ${COLORS.textMuted};
     }
   </style>
 </head>
@@ -143,21 +158,17 @@ function buildMapHtml(routes) {
 
   <script>
     const routesData = ${JSON.stringify(routesData)};
+    const quietPlaces = ${JSON.stringify(quietPlaces || [])};
 
-    const map = L.map('map', {
-      zoomControl: false
-    });
-
+    const map = L.map('map', { zoomControl: false });
     window.map = map;
 
     map.setView([20.5937, 78.9629], 5);
 
-    setTimeout(() => {
-      map.invalidateSize();
-    }, 300);
+    setTimeout(() => { map.invalidateSize(); }, 300);
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
+    L.tileLayer('${TILE_URL}', {
+      attribution: '${TILE_ATTR}',
       maxZoom: 19,
     }).addTo(map);
 
@@ -165,37 +176,45 @@ function buildMapHtml(routes) {
 
     routesData.forEach((r) => {
       if (r.coords.length === 0) {
-        console.log(
-          'Route has no coordinates, skipping draw:',
-          r.id
-        );
+        console.log('Route has no coordinates, skipping draw:', r.id);
         return;
       }
 
-      lines[r.id] = L.polyline(
-        r.coords,
-        {
-          color: r.color,
-          weight: 3,
-          opacity: 0.55
-        }
-      ).addTo(map);
+      lines[r.id] = L.polyline(r.coords, {
+        color: r.color,
+        weight: 3,
+        opacity: 0.55,
+        lineJoin: 'round',
+        lineCap: 'round'
+      }).addTo(map);
+    });
 
-      console.log("coords", r.coords);
+    // Nearby quiet places — soft, low-contrast dots so they read as
+    // supporting information rather than competing with the routes.
+    quietPlaces.forEach((p) => {
+      if (p.lat == null || p.lng == null) return;
+
+      L.circleMarker([p.lat, p.lng], {
+        radius: 6,
+        color: '#5C9367',
+        weight: 2,
+        fillColor: '#8FBF99',
+        fillOpacity: 0.75
+      })
+        .addTo(map)
+        .bindPopup((p.name || 'Quiet place') + (p.type ? ' — ' + p.type : ''));
     });
 
     let startMarker = null;
     let endMarker = null;
 
     window.selectRoute = function (id) {
-
       Object.keys(lines).forEach((key) => {
-        const isSelected =
-          String(key) === String(id);
+        const isSelected = String(key) === String(id);
 
         lines[key].setStyle({
           weight: isSelected ? 6 : 3,
-          opacity: isSelected ? 1 : 0.45
+          opacity: isSelected ? 1 : 0.35
         });
 
         if (isSelected) {
@@ -203,53 +222,25 @@ function buildMapHtml(routes) {
         }
       });
 
-      const selected = routesData.find(
-        (r) => String(r.id) === String(id)
-      );
+      const selected = routesData.find((r) => String(r.id) === String(id));
 
-      if (
-        !selected ||
-        selected.coords.length === 0 ||
-        !lines[id]
-      ) {
-        console.log(
-          'No coordinates available for route',
-          id,
-          '- map stays at fallback view'
-        );
+      if (!selected || selected.coords.length === 0 || !lines[id]) {
+        console.log('No coordinates available for route', id);
         return;
       }
 
-      if (startMarker) {
-        map.removeLayer(startMarker);
-      }
+      if (startMarker) map.removeLayer(startMarker);
+      if (endMarker) map.removeLayer(endMarker);
 
-      if (endMarker) {
-        map.removeLayer(endMarker);
-      }
+      startMarker = L.marker(selected.coords[0]).addTo(map).bindPopup('Start');
 
-      startMarker = L.marker(
-        selected.coords[0]
-      )
-        .addTo(map)
-        .bindPopup('Start');
-
-      endMarker = L.marker(
-        selected.coords[selected.coords.length - 1]
-      )
+      endMarker = L.marker(selected.coords[selected.coords.length - 1])
         .addTo(map)
         .bindPopup('Destination');
 
-      map.fitBounds(
-        lines[id].getBounds(),
-        {
-          padding: [60, 60]
-        }
-      );
+      map.fitBounds(lines[id].getBounds(), { padding: [60, 60] });
 
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 100);
+      setTimeout(() => { map.invalidateSize(); }, 100);
     };
 
     if (routesData.length > 0) {
@@ -261,29 +252,21 @@ function buildMapHtml(routes) {
 `;
 }
 
-export default function RouteOptionsScreen({
-  navigation,
-  route
-}) {
+export default function RouteOptionsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
 
-  const {
-    source,
-    destination,
-    profile,
-    preferences
-  } = route?.params || {};
+  const { source, destination, profile, preferences } = route?.params || {};
 
   const [routes, setRoutes] = useState([]);
+  const [quietPlaces, setQuietPlaces] = useState([]);
   const [topExplanation, setTopExplanation] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [trafficInfo, setTrafficInfo] = useState(null);
 
-  // Display-only toggle.
-  // Both durations already come back in one response.
+  // Display-only toggle. Both durations already come back in one response.
   const [travelMode, setTravelMode] = useState('driving');
 
   const fetchRoutes = async () => {
@@ -293,95 +276,38 @@ export default function RouteOptionsScreen({
     try {
       const token = await AsyncStorage.getItem('token');
 
-      const res = await fetch(
-        `${API_URL}/api/routes/plan`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token
-              ? {
-                  Authorization: `Bearer ${token}`
-                }
-              : {}),
-          },
-          body: JSON.stringify({
-            source,
-            destination,
-            profile,
-            preferences
-          }),
-        }
-      );
+      const res = await fetch(`${API_URL}/api/routes/plan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ source, destination, profile, preferences }),
+      });
 
       const data = await res.json();
 
-      console.log("ROUTE RESPONSE");
-      console.log(
-        JSON.stringify(data, null, 2)
-      );
-
-      console.log(
-        "FULL RESPONSE:",
-        JSON.stringify(data, null, 2)
-      );
-
-      console.log(
-        "Recommended Geometry:",
-        JSON.stringify(
-          data.recommendedRoute?.geometry,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "Coordinates:",
-        data.recommendedRoute?.geometry?.coordinates
-      );
-
       if (!res.ok) {
-        throw new Error(
-          data.error || 'Could not plan a route'
-        );
+        throw new Error(data.error || 'Could not plan a route');
       }
 
       const combined = [
-        {
-          ...data.recommendedRoute,
-          isRecommended: true
-        },
-
-        ...(data.alternativeRoutes || []).map(
-          (r) => ({
-            ...r,
-            isRecommended: false
-          })
-        ),
+        { ...data.recommendedRoute, isRecommended: true },
+        ...(data.alternativeRoutes || []).map((r) => ({
+          ...r,
+          isRecommended: false,
+        })),
       ];
 
       setRoutes(combined);
-
-      // ---------------------------------------------------------
-      // FIX:
-      // `data.explanation` can be an object:
-      // { type, text, extras }
-      //
-      // Extract only the text before storing it in state.
-      // ---------------------------------------------------------
-      setTopExplanation(
-        getExplanationText(data.explanation)
-      );
+      setQuietPlaces(data.nearbyQuietPlaces || []);
+      setTopExplanation(getExplanationText(data.explanation));
 
       if (combined.length > 0) {
         setSelectedId(combined[0].id);
       }
-
     } catch (err) {
-      setError(
-        err.message ||
-          'Could not load routes. Check your connection.'
-      );
+      setError(err.message || 'Could not load routes. Check your connection.');
     } finally {
       setLoading(false);
     }
@@ -395,48 +321,27 @@ export default function RouteOptionsScreen({
     if (routes.length === 0) return;
 
     const recommended = routes[0];
-
-    const firstPoint =
-      recommended.geometry?.coordinates?.[0];
-
+    const firstPoint = recommended.geometry?.coordinates?.[0];
     if (!firstPoint) return;
 
     const [lng, lat] = firstPoint;
 
-    fetch(
-      `${API_URL}/api/traffic?lat=${lat}&lng=${lng}`
-    )
+    fetch(`${API_URL}/api/traffic?lat=${lat}&lng=${lng}`)
       .then((res) => res.json())
-      .then((data) => {
-        setTrafficInfo(data);
-      })
-      .catch((err) =>
-        console.log(
-          'Traffic fetch failed:',
-          err.message
-        )
-      );
-
+      .then((data) => setTrafficInfo(data))
+      .catch((err) => console.log('Traffic fetch failed:', err.message));
   }, [routes]);
 
   const mapHtml = useMemo(
-    () =>
-      routes.length > 0
-        ? buildMapHtml(routes)
-        : null,
-    [routes]
+    () => (routes.length > 0 ? buildMapHtml(routes, quietPlaces) : null),
+    [routes, quietPlaces]
   );
 
   useEffect(() => {
     // Explicit null check so route ID 0 works correctly.
-    if (
-      selectedId != null &&
-      webViewRef.current
-    ) {
+    if (selectedId != null && webViewRef.current) {
       webViewRef.current.injectJavaScript(
-        `window.selectRoute(${JSON.stringify(
-          selectedId
-        )}); true;`
+        `window.selectRoute(${JSON.stringify(selectedId)}); true;`
       );
     }
   }, [selectedId]);
@@ -446,93 +351,48 @@ export default function RouteOptionsScreen({
   };
 
   const handleStartRoute = () => {
-    const selectedRoute = routes.find(
-      (r) => r.id === selectedId
-    );
-
+    const selectedRoute = routes.find((r) => r.id === selectedId);
     if (!selectedRoute) return;
 
-    navigation?.navigate(
-      'Navigation',
-      {
-        selectedRoute,
-        travelMode,
-        destination,
-        profile,
-        preferences,
-      }
-    );
+    navigation?.navigate('Navigation', {
+      selectedRoute,
+      travelMode,
+      destination,
+      profile,
+      // Passed through so NavigationScreen can read blurSurroundings
+      // and set its initial focus mode without a second fetch.
+      preferences,
+    });
   };
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: COLORS.heroTop
-      }}
-    >
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor={COLORS.heroTop}
-      />
+    <View style={{ flex: 1, backgroundColor: COLORS.heroTop }}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.heroTop} />
 
-      <View
-        style={[
-          styles.heroBand,
-          {
-            paddingTop:
-              insets.top + 14
-          }
-        ]}
-      >
+      <View style={[styles.heroBand, { paddingTop: insets.top + 14 }]}>
         <TouchableOpacity
-          style={[
-            styles.backLink,
-            {
-              top:
-                insets.top + 14
-            }
-          ]}
-          onPress={() =>
-            navigation?.goBack()
-          }
+          style={[styles.backLink, { top: insets.top + 14 }]}
+          onPress={() => navigation?.goBack()}
         >
-          <Text style={styles.backLinkText}>
-            ‹ Back
-          </Text>
+          <Text style={styles.backLinkText}>‹ Back</Text>
         </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>
-          Choose your route
-        </Text>
+        <Text style={styles.headerTitle}>Choose your route</Text>
       </View>
 
       {loading && (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator
-            size="large"
-            color={COLORS.primary}
-          />
-
-          <Text style={styles.loadingText}>
-            Finding your calmest routes…
-          </Text>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Finding your calmest routes…</Text>
         </View>
       )}
 
       {!loading && error && (
         <View style={styles.errorWrap}>
-          <Text style={styles.errorText}>
-            {error}
-          </Text>
+          <Text style={styles.errorText}>{error}</Text>
 
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={fetchRoutes}
-          >
-            <Text style={styles.retryButtonText}>
-              Try again
-            </Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchRoutes}>
+            <Text style={styles.retryButtonText}>Try again</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -547,16 +407,12 @@ export default function RouteOptionsScreen({
                 javaScriptEnabled={true}
                 domStorageEnabled={true}
                 mixedContentMode="always"
-                source={{
-                  html: mapHtml
-                }}
+                source={{ html: mapHtml }}
                 style={styles.map}
                 onLoadEnd={() => {
                   webViewRef.current?.injectJavaScript(`
                     setTimeout(() => {
-                      if (window.map) {
-                        window.map.invalidateSize();
-                      }
+                      if (window.map) { window.map.invalidateSize(); }
                     }, 300);
                     true;
                   `);
@@ -565,39 +421,22 @@ export default function RouteOptionsScreen({
             )}
           </View>
 
-          <View
-            style={[
-              styles.sheet,
-              {
-                paddingBottom:
-                  insets.bottom + 8
-              }
-            ]}
-          >
-            <View
-              style={styles.sheetHandle}
-            />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 8 }]}>
+            <View style={styles.sheetHandle} />
 
             {/* Drive / Walk toggle */}
-            <View
-              style={styles.modeToggleRow}
-            >
+            <View style={styles.modeToggleRow}>
               <TouchableOpacity
                 style={[
                   styles.modeToggleButton,
-                  travelMode === 'driving' &&
-                    styles.modeToggleButtonActive,
+                  travelMode === 'driving' && styles.modeToggleButtonActive,
                 ]}
-                onPress={() =>
-                  setTravelMode('driving')
-                }
+                onPress={() => setTravelMode('driving')}
               >
                 <Text
                   style={[
                     styles.modeToggleText,
-                    travelMode ===
-                      'driving' &&
-                      styles.modeToggleTextActive,
+                    travelMode === 'driving' && styles.modeToggleTextActive,
                   ]}
                 >
                   Drive
@@ -607,19 +446,14 @@ export default function RouteOptionsScreen({
               <TouchableOpacity
                 style={[
                   styles.modeToggleButton,
-                  travelMode === 'walking' &&
-                    styles.modeToggleButtonActive,
+                  travelMode === 'walking' && styles.modeToggleButtonActive,
                 ]}
-                onPress={() =>
-                  setTravelMode('walking')
-                }
+                onPress={() => setTravelMode('walking')}
               >
                 <Text
                   style={[
                     styles.modeToggleText,
-                    travelMode ===
-                      'walking' &&
-                      styles.modeToggleTextActive,
+                    travelMode === 'walking' && styles.modeToggleTextActive,
                   ]}
                 >
                   Walk
@@ -627,234 +461,111 @@ export default function RouteOptionsScreen({
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-            >
-              <Text
-                style={styles.sheetSummary}
-              >
-                {routes.length} route
-                {routes.length !== 1
-                  ? 's'
-                  : ''}{' '}
-                found · tap a route to
-                preview it on the map
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.sheetSummary}>
+                {routes.length} route{routes.length !== 1 ? 's' : ''} found · tap
+                a route to preview it on the map
               </Text>
 
               {trafficInfo && (
-                <Text
-                  style={[
-                    styles.metaText,
-                    {
-                      marginBottom: 12
-                    }
-                  ]}
-                >
+                <Text style={[styles.metaText, { marginBottom: 12 }]}>
                   Live traffic near start:{' '}
-                  {Math.round(
-                    trafficInfo.congestion *
-                      100
-                  )}
-                  % congested
+                  {Math.round(trafficInfo.congestion * 100)}% congested
                 </Text>
               )}
 
-              {routes.map(
-                (r, index) => {
-                  const isRecommended =
-                    r.isRecommended;
+              {routes.map((r, index) => {
+                const isRecommended = r.isRecommended;
+                const isSelected = r.id === selectedId;
 
-                  const isSelected =
-                    r.id === selectedId;
+                const distanceKm =
+                  Math.round((r.distanceMeters / 1000) * 10) / 10;
 
-                  const distanceKm =
-                    Math.round(
-                      (r.distanceMeters /
-                        1000) *
-                        10
-                    ) / 10;
+                const durationSeconds =
+                  travelMode === 'walking'
+                    ? r.durationSecondsWalking
+                    : r.durationSecondsDriving;
 
-                  const durationSeconds =
-                    travelMode ===
-                    'walking'
-                      ? r.durationSecondsWalking
-                      : r.durationSecondsDriving;
+                const durationLabel = formatDuration(
+                  durationSeconds,
+                  travelMode
+                );
 
-                  const durationLabel =
-                    formatDuration(
-                      durationSeconds,
-                      travelMode
-                    );
-
-                  return (
-                    <TouchableOpacity
-                      key={r.id}
-                      style={[
-                        styles.routeCard,
-                        isSelected &&
-                          styles.routeCardSelected
-                      ]}
-                      onPress={() =>
-                        handleSelectCard(r)
-                      }
-                    >
-                      {isRecommended && (
-                        <View
-                          style={
-                            styles.recommendedBadge
-                          }
-                        >
-                          <Text
-                            style={
-                              styles.recommendedBadgeText
-                            }
-                          >
-                            Recommended
-                          </Text>
-                        </View>
-                      )}
-
-                      <View
-                        style={
-                          styles.routeTopRow
-                        }
-                      >
-                        <View
-                          style={
-                            styles.routeNameRow
-                          }
-                        >
-                          <View
-                            style={[
-                              styles.routeColorDot,
-                              {
-                                backgroundColor:
-                                  ROUTE_LINE_COLORS[
-                                    index %
-                                      ROUTE_LINE_COLORS.length
-                                  ],
-                              },
-                            ]}
-                          />
-
-                          <Text
-                            style={
-                              styles.routeName
-                            }
-                          >
-                            Route{' '}
-                            {String.fromCharCode(
-                              65 + index
-                            )}
-                          </Text>
-                        </View>
-
-                        <View>
-                          <Text
-                            style={[
-                              styles.scoreValue,
-                              {
-                                color:
-                                  scoreColor(
-                                    r.sensoryScore
-                                  ),
-                              },
-                            ]}
-                          >
-                            {r.sensoryScore}
-                          </Text>
-
-                          <Text
-                            style={
-                              styles.scoreLabel
-                            }
-                          >
-                            sensory score
-                          </Text>
-                        </View>
+                return (
+                  <TouchableOpacity
+                    key={r.id}
+                    style={[
+                      styles.routeCard,
+                      isSelected && styles.routeCardSelected,
+                    ]}
+                    onPress={() => handleSelectCard(r)}
+                  >
+                    {isRecommended && (
+                      <View style={styles.recommendedBadge}>
+                        <Text style={styles.recommendedBadgeText}>
+                          Recommended
+                        </Text>
                       </View>
+                    )}
 
-                      <View
-                        style={styles.metaRow}
-                      >
-                        <Text
-                          style={
-                            styles.metaText
-                          }
-                        >
-                          {durationLabel}
-                        </Text>
+                    <View style={styles.routeTopRow}>
+                      <View style={styles.routeNameRow}>
+                        <View
+                          style={[
+                            styles.routeColorDot,
+                            {
+                              backgroundColor:
+                                ROUTE_LINE_COLORS[
+                                  index % ROUTE_LINE_COLORS.length
+                                ],
+                            },
+                          ]}
+                        />
 
-                        <Text
-                          style={
-                            styles.metaDot
-                          }
-                        >
-                          ·
-                        </Text>
-
-                        <Text
-                          style={
-                            styles.metaText
-                          }
-                        >
-                          {distanceKm} km
-                        </Text>
-
-                        <Text
-                          style={
-                            styles.metaDot
-                          }
-                        >
-                          ·
-                        </Text>
-
-                        <Text
-                          style={
-                            styles.metaText
-                          }
-                        >
-                          {travelMode ===
-                          'walking'
-                            ? 'walking'
-                            : 'driving'}
+                        <Text style={styles.routeName}>
+                          Route {String.fromCharCode(65 + index)}
                         </Text>
                       </View>
 
-                      <Text
-                        style={
-                          styles.explanationText
-                        }
-                      >
-                        {isRecommended
-                          ? topExplanation
-                          : fallbackExplanation(
-                              r.sensoryScore
-                            )}
+                      <View>
+                        <Text
+                          style={[
+                            styles.scoreValue,
+                            { color: scoreColor(r.sensoryScore) },
+                          ]}
+                        >
+                          {r.sensoryScore}
+                        </Text>
+
+                        <Text style={styles.scoreLabel}>sensory score</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.metaRow}>
+                      <Text style={styles.metaText}>{durationLabel}</Text>
+                      <Text style={styles.metaDot}>·</Text>
+                      <Text style={styles.metaText}>{distanceKm} km</Text>
+                      <Text style={styles.metaDot}>·</Text>
+                      <Text style={styles.metaText}>
+                        {travelMode === 'walking' ? 'walking' : 'driving'}
                       </Text>
-                    </TouchableOpacity>
-                  );
-                }
-              )}
+                    </View>
+
+                    <Text style={styles.explanationText}>
+                      {isRecommended
+                        ? topExplanation
+                        : fallbackExplanation(r.sensoryScore)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
 
               <TouchableOpacity
-                style={
-                  styles.startButton
-                }
-                onPress={
-                  handleStartRoute
-                }
-                disabled={
-                  selectedId == null
-                }
+                style={styles.startButton}
+                onPress={handleStartRoute}
+                disabled={selectedId == null}
               >
-                <Text
-                  style={
-                    styles.startButtonText
-                  }
-                >
-                  Start this route
-                </Text>
+                <Text style={styles.startButtonText}>Start this route</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>

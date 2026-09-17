@@ -78,6 +78,30 @@ export default StyleSheet.create({
     color: COLORS.text,
   },
 
+  // --- NEW: focus-mode chip (top right) ---
+  // Cycles the map's blur between spotlight / calm / off. Mirrors
+  // backButton's look-and-feel so the two chips read as a pair.
+  focusChip: {
+    position: 'absolute',
+    right: 16,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: COLORS.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  focusChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.primary,
+  },
+
   bottomBar: {
     backgroundColor: COLORS.surface,
     borderTopLeftRadius: RADIUS.card,

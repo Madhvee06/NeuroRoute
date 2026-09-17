@@ -1,3 +1,4 @@
+//PreferencesScreen.js
 import React, { useState } from 'react';
 import {
   View,
@@ -18,6 +19,15 @@ import { API_URL } from '../config/api';
 // NeuroRoute — Preferences Setup Screen
 // Shown right after Profile Selection. Toggles map directly to
 // the sensory-factor weights (W1..W6) in the synopsis's formula.
+//
+// NOTE on `blurSurroundings`: unlike the other six, this one does
+// NOT feed the scoring formula. It is a display preference, read
+// by NavigationScreen to decide whether the map blurs everything
+// outside the road ahead during an active journey. It lives here
+// rather than in Settings because it is a sensory-comfort choice
+// like the rest, and because some users find blur itself
+// disorienting — it must be opt-out-able before the first journey,
+// not discovered mid-drive.
 // ---------------------------------------------------------------
 
 const PREFERENCES = [
@@ -51,6 +61,12 @@ const PREFERENCES = [
     label: 'Prefer Safe Routes',
     description: 'Prioritize well-lit, well-traveled paths',
   },
+  {
+    id: 'blurSurroundings',
+    label: 'Blur Surroundings While Navigating',
+    description:
+      'Softens everything except the road ahead, to reduce visual load',
+  },
 ];
 
 export default function PreferencesScreen({ navigation, route }) {
@@ -65,6 +81,7 @@ export default function PreferencesScreen({ navigation, route }) {
     avoidConstruction: true,
     preferParks: false,
     preferSafeRoutes: true,
+    blurSurroundings: true,
   });
 
   const togglePref = (id) => {
