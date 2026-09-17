@@ -1,14 +1,4 @@
-"""
-NeuroRoute — Random Forest Training (fast, no-frills version)
 
-Trains on training_data.csv (from generate_data.py) and saves the
-model. No hyperparameter tuning, minimal evaluation — this is
-intentional given the 10-day deadline. Swap in real feedback data
-later and rerun this exact same script.
-
-Run: python train_model.py
-Output: comfort_model.pkl
-"""
 
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
