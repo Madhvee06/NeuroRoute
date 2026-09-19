@@ -1,14 +1,30 @@
+"""
+NeuroRoute — Agentic AI Decision Engine
+
+Matches Section 7(f) of the synopsis exactly:
+  - Compares all possible routes
+  - Evaluates the sensory score of each route
+  - Considers user preferences and profile
+  - Uses Machine Learning predictions
+  - Selects the most suitable route by balancing time, safety, comfort
+  - Explains the recommendation (this is the ONLY step that uses the LLM)
+
+Run: uvicorn main:app --port 8000 --reload
+"""
 
 from typing import TypedDict, List, Dict, Any
 from fastapi import FastAPI
 import joblib
 import pandas as pd
-import os
-from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI  # free tier via Google AI Studio
+from dotenv import load_dotenv
 
+# Reads GOOGLE_API_KEY (and anything else) from a .env file sitting in
+# this same folder, so you no longer need `set GOOGLE_API_KEY=...` by
+# hand every time you open a new terminal to run this.
 load_dotenv()
+
 # ---------------------------------------------------------------
 # Load the trained Random Forest model once, at startup
 # ---------------------------------------------------------------
@@ -16,7 +32,7 @@ bundle = joblib.load("comfort_model.pkl")
 rf_model = bundle["model"]
 FEATURE_COLS = bundle["feature_cols"]
 
-llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0)  # only used for the explanation step
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)  # only used for the explanation step
 
 
 # ---------------------------------------------------------------
@@ -93,14 +109,35 @@ def explain_decision(state: AgentState) -> AgentState:
     best = state["decision"]["chosenRoute"]
     prompt = (
         f"A route was chosen for a {state['profile']} user profile. "
-        f"Its sensory score is {best['sensoryScore']} and the ML model predicts "
-        f"comfort level: {best.get('predictedComfort')}. "
+        f"Its sensory score is {best['sensoryScore']} (lower is calmer). "
         f"User preferences: {state['preferences']}. "
-        "In 1-2 short, warm sentences, explain to the user in simple words why this route was chosen. "
-        "Do not mention 'ML model' or technical terms — speak plainly."
+        "In 1-2 short, warm sentences, explain to the user why this route was chosen. "
+        "Speak plainly, no technical terms."
     )
     response = llm.invoke(prompt)
-    state["decision"]["explanation"] = response.content
+
+    # DEBUG — shows exactly what Gemini returned. Remove once confirmed working.
+    print("RAW LLM RESPONSE CONTENT:", repr(response.content))
+    print("RAW LLM RESPONSE TYPE:", type(response.content))
+
+    explanation_text = response.content
+    # response.content can sometimes be a list of content blocks instead
+    # of a plain string — normalize it here so we never store '' or a
+    # non-string value.
+    if isinstance(explanation_text, list):
+        explanation_text = " ".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in explanation_text
+        )
+
+    if not explanation_text or not explanation_text.strip():
+        print("WARNING: LLM returned empty content, using Python-side fallback")
+        explanation_text = (
+            f"This route was chosen because it has a lower sensory score "
+            f"({best['sensoryScore']}), making it calmer overall."
+        )
+
+    state["decision"]["explanation"] = explanation_text
     return state
 
 

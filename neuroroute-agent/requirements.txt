@@ -3,6 +3,7 @@ uvicorn
 scikit-learn
 pandas
 joblib
+python-dotenv
 langgraph
 langchain-google-genai
 google-generativeai

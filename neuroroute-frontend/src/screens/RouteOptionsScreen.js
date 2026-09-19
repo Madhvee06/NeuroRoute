@@ -15,27 +15,6 @@ import { COLORS } from '../theme';
 import styles from './RouteOptionsScreen.styles';
 import { API_URL } from '../config/api';
 
-// ---------------------------------------------------------------
-// NeuroRoute — Route Options Screen (pure OpenStreetMap via Leaflet)
-//
-// Backend contract:
-//   POST /api/routes/plan
-//   body: { source, destination, profile, preferences }
-//   response: { recommendedRoute, alternativeRoutes, explanation,
-//               nearbyQuietPlaces, journeyId }
-//   Each route includes BOTH durationSecondsDriving and
-//   durationSecondsWalking, so switching modes on this screen is
-//   instant — no refetch required. Each route also now includes
-//   `steps` (turn-by-turn), used by NavigationScreen.
-//
-// FIX: route `id` values from the backend start at 0
-// (assigned as array index before sorting by score), so the very
-// first/recommended route can legitimately have id === 0. Any check
-// like `!selectedId` or `disabled={!selectedId}` treats 0 as falsy
-// and silently breaks. Every such check below explicitly compares
-// against null/undefined instead.
-// ---------------------------------------------------------------
-
 const ROUTE_LINE_COLORS = [COLORS.primary, '#B08968', '#8AA6C1'];
 
 function scoreColor(score) {
@@ -51,38 +30,54 @@ function fallbackExplanation(score) {
 }
 
 // ---------------------------------------------------------------
-// NEW FIX:
-// Backend explanation can be either:
+// FIX (expanded): backend `explanation` can come back as THREE
+// different shapes depending on whether the agent responded and how
+// Gemini formatted its output that particular time:
 //
-// 1. A string:
-//    "This is the calmest route."
+// 1. A plain string: "This is the calmest route."
+// 2. An object: { type, text, extras }
+// 3. A LIST of content blocks — the one that was missing:
+//    [{ type: "text", text: "This is the calmest route." }]
+//    Gemini's langchain wrapper (langchain_google_genai) can return
+//    response.content in this shape, particularly with "automatic
+//    function calling" (see the AFC warning in the agent's logs).
+//    On an array, `.text` is undefined, so the old version silently
+//    returned ''.
 //
-// OR
-//
-// 2. An object:
-//    {
-//      type: "...",
-//      text: "This is the calmest route.",
-//      extras: {...}
-//    }
-//
-// React Native <Text> cannot render an object directly,
-// so we extract the `text` property.
+// Never returns '' — falls back to a generic sentence instead of blank.
 // ---------------------------------------------------------------
 function getExplanationText(explanation) {
-  if (typeof explanation === 'string') {
+  if (typeof explanation === 'string' && explanation.trim().length > 0) {
     return explanation;
   }
 
-  if (explanation && typeof explanation === 'object') {
-    return explanation.text || '';
+  if (Array.isArray(explanation)) {
+    const joined = explanation
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object') {
+          return block.text || block.content || '';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+    if (joined.trim().length > 0) return joined;
   }
 
-  return '';
+  if (explanation && typeof explanation === 'object') {
+    const candidate = explanation.text || explanation.content || explanation.explanation || explanation.message;
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate;
+    }
+    if (candidate && typeof candidate === 'object') {
+      return getExplanationText(candidate);
+    }
+  }
+
+  return 'This route was selected based on your profile and current conditions.';
 }
 
-// Driving durations stay in minutes (usually short). Walking durations
-// can run into hours for longer distances, so format those as h/m.
 function formatDuration(seconds, mode) {
   const totalMinutes = Math.round(seconds / 60);
 
@@ -95,7 +90,6 @@ function formatDuration(seconds, mode) {
   return `${totalMinutes} min`;
 }
 
-// OSRM/GeoJSON gives coordinates as [lng, lat]. Leaflet wants [lat, lng].
 function toLatLngs(geometry) {
   if (!geometry?.coordinates) return [];
   return geometry.coordinates.map(([lng, lat]) => [lat, lng]);
@@ -113,64 +107,29 @@ function buildMapHtml(routes) {
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-  />
-
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    html,
-    body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-    }
-
-    #map {
-      width: 100vw;
-      height: 100vh;
-    }
+    html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+    #map { width: 100vw; height: 100vh; }
   </style>
 </head>
-
 <body>
   <div id="map"></div>
-
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
   <script>
     const routesData = ${JSON.stringify(routesData)};
-
-    const map = L.map('map', {
-      zoomControl: false
-    });
-
+    const map = L.map('map', { zoomControl: false });
     window.map = map;
-
     map.setView([20.5937, 78.9629], 5);
 
-    setTimeout(() => {
-      map.invalidateSize();
-    }, 300);
+    setTimeout(() => { map.invalidateSize(); }, 300);
 
-    // OpenStreetMap "Humanitarian" style — full color, same OSM
-    // data, no API key required. CARTO's basemaps.cartocdn.com
-    // (used previously) now requires a paid/registered API key for
-    // any real usage, which is why that showed a watermark instead
-    // of tiles. This style keeps colors but has noticeably fewer
-    // commercial POI icons/labels than the plain osm.org style.
     L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OSM Team',
       maxZoom: 19,
       subdomains: ['a', 'b', 'c'],
     }).addTo(map);
 
-    // Flat dot marker builder — replaces Leaflet's default pin
-    // (teardrop shape + drop shadow + blue/white coloring), which
-    // reads as heavy chrome next to a calm basemap.
     function flatDot(label, color) {
       return L.divIcon({
         className: '',
@@ -187,25 +146,12 @@ function buildMapHtml(routes) {
     }
 
     const lines = {};
-
     routesData.forEach((r) => {
       if (r.coords.length === 0) {
-        console.log(
-          'Route has no coordinates, skipping draw:',
-          r.id
-        );
+        console.log('Route has no coordinates, skipping draw:', r.id);
         return;
       }
-
-      lines[r.id] = L.polyline(
-        r.coords,
-        {
-          color: r.color,
-          weight: 3,
-          opacity: 0.55
-        }
-      ).addTo(map);
-
+      lines[r.id] = L.polyline(r.coords, { color: r.color, weight: 3, opacity: 0.55 }).addTo(map);
       console.log("coords", r.coords);
     });
 
@@ -213,70 +159,31 @@ function buildMapHtml(routes) {
     let endMarker = null;
 
     window.selectRoute = function (id) {
-
       Object.keys(lines).forEach((key) => {
-        const isSelected =
-          String(key) === String(id);
-
-        lines[key].setStyle({
-          weight: isSelected ? 6 : 3,
-          opacity: isSelected ? 1 : 0.45
-        });
-
-        if (isSelected) {
-          lines[key].bringToFront();
-        }
+        const isSelected = String(key) === String(id);
+        lines[key].setStyle({ weight: isSelected ? 6 : 3, opacity: isSelected ? 1 : 0.45 });
+        if (isSelected) { lines[key].bringToFront(); }
       });
 
-      const selected = routesData.find(
-        (r) => String(r.id) === String(id)
-      );
-
-      if (
-        !selected ||
-        selected.coords.length === 0 ||
-        !lines[id]
-      ) {
-        console.log(
-          'No coordinates available for route',
-          id,
-          '- map stays at fallback view'
-        );
+      const selected = routesData.find((r) => String(r.id) === String(id));
+      if (!selected || selected.coords.length === 0 || !lines[id]) {
+        console.log('No coordinates available for route', id, '- map stays at fallback view');
         return;
       }
 
-      if (startMarker) {
-        map.removeLayer(startMarker);
-      }
+      if (startMarker) { map.removeLayer(startMarker); }
+      if (endMarker) { map.removeLayer(endMarker); }
 
-      if (endMarker) {
-        map.removeLayer(endMarker);
-      }
-
-      startMarker = L.marker(
-        selected.coords[0],
-        { icon: flatDot('S', '${COLORS.primary}') }
-      )
+      startMarker = L.marker(selected.coords[0], { icon: flatDot('S', '${COLORS.primary}') })
         .addTo(map)
         .bindPopup('Start');
 
-      endMarker = L.marker(
-        selected.coords[selected.coords.length - 1],
-        { icon: flatDot('D', '${COLORS.accent}') }
-      )
+      endMarker = L.marker(selected.coords[selected.coords.length - 1], { icon: flatDot('D', '${COLORS.accent}') })
         .addTo(map)
         .bindPopup('Destination');
 
-      map.fitBounds(
-        lines[id].getBounds(),
-        {
-          padding: [60, 60]
-        }
-      );
-
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 100);
+      map.fitBounds(lines[id].getBounds(), { padding: [60, 60] });
+      setTimeout(() => { map.invalidateSize(); }, 100);
     };
 
     if (routesData.length > 0) {
@@ -288,19 +195,11 @@ function buildMapHtml(routes) {
 `;
 }
 
-export default function RouteOptionsScreen({
-  navigation,
-  route
-}) {
+export default function RouteOptionsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef(null);
 
-  const {
-    source,
-    destination,
-    profile,
-    preferences
-  } = route?.params || {};
+  const { source, destination, profile, preferences } = route?.params || {};
 
   const [routes, setRoutes] = useState([]);
   const [topExplanation, setTopExplanation] = useState('');
@@ -308,9 +207,6 @@ export default function RouteOptionsScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [trafficInfo, setTrafficInfo] = useState(null);
-
-  // Display-only toggle.
-  // Both durations already come back in one response.
   const [travelMode, setTravelMode] = useState('driving');
 
   const fetchRoutes = async () => {
@@ -320,95 +216,46 @@ export default function RouteOptionsScreen({
     try {
       const token = await AsyncStorage.getItem('token');
 
-      const res = await fetch(
-        `${API_URL}/api/routes/plan`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token
-              ? {
-                  Authorization: `Bearer ${token}`
-                }
-              : {}),
-          },
-          body: JSON.stringify({
-            source,
-            destination,
-            profile,
-            preferences
-          }),
-        }
-      );
+      const res = await fetch(`${API_URL}/api/routes/plan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ source, destination, profile, preferences }),
+      });
 
       const data = await res.json();
 
       console.log("ROUTE RESPONSE");
-      console.log(
-        JSON.stringify(data, null, 2)
-      );
+      console.log(JSON.stringify(data, null, 2));
 
-      console.log(
-        "FULL RESPONSE:",
-        JSON.stringify(data, null, 2)
-      );
-
-      console.log(
-        "Recommended Geometry:",
-        JSON.stringify(
-          data.recommendedRoute?.geometry,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "Coordinates:",
-        data.recommendedRoute?.geometry?.coordinates
-      );
+      // DEBUG — shows exactly what shape `explanation` arrived in.
+      // Safe to remove once this is confirmed working.
+      console.log('EXPLANATION TYPE:', typeof data.explanation, Array.isArray(data.explanation));
+      console.log('EXPLANATION RAW:', JSON.stringify(data.explanation));
 
       if (!res.ok) {
-        throw new Error(
-          data.error || 'Could not plan a route'
-        );
+        throw new Error(data.error || 'Could not plan a route');
       }
 
       const combined = [
-        {
-          ...data.recommendedRoute,
-          isRecommended: true
-        },
-
-        ...(data.alternativeRoutes || []).map(
-          (r) => ({
-            ...r,
-            isRecommended: false
-          })
-        ),
+        { ...data.recommendedRoute, isRecommended: true },
+        ...(data.alternativeRoutes || []).map((r) => ({ ...r, isRecommended: false })),
       ];
 
       setRoutes(combined);
 
-      // ---------------------------------------------------------
-      // FIX:
-      // `data.explanation` can be an object:
-      // { type, text, extras }
-      //
-      // Extract only the text before storing it in state.
-      // ---------------------------------------------------------
-      setTopExplanation(
-        getExplanationText(data.explanation)
-      );
+      // FIX: data.explanation can be a string, object, or a list of
+      // content blocks (see getExplanationText above). It now
+      // handles all three and never returns an empty string.
+      setTopExplanation(getExplanationText(data.explanation));
 
       if (combined.length > 0) {
         setSelectedId(combined[0].id);
       }
-
     } catch (err) {
-      setError(
-        err.message ||
-          'Could not load routes. Check your connection.'
-      );
+      setError(err.message || 'Could not load routes. Check your connection.');
     } finally {
       setLoading(false);
     }
@@ -422,48 +269,23 @@ export default function RouteOptionsScreen({
     if (routes.length === 0) return;
 
     const recommended = routes[0];
-
-    const firstPoint =
-      recommended.geometry?.coordinates?.[0];
-
+    const firstPoint = recommended.geometry?.coordinates?.[0];
     if (!firstPoint) return;
 
     const [lng, lat] = firstPoint;
 
-    fetch(
-      `${API_URL}/api/traffic?lat=${lat}&lng=${lng}`
-    )
+    fetch(`${API_URL}/api/traffic?lat=${lat}&lng=${lng}`)
       .then((res) => res.json())
-      .then((data) => {
-        setTrafficInfo(data);
-      })
-      .catch((err) =>
-        console.log(
-          'Traffic fetch failed:',
-          err.message
-        )
-      );
-
+      .then((data) => { setTrafficInfo(data); })
+      .catch((err) => console.log('Traffic fetch failed:', err.message));
   }, [routes]);
 
-  const mapHtml = useMemo(
-    () =>
-      routes.length > 0
-        ? buildMapHtml(routes)
-        : null,
-    [routes]
-  );
+  const mapHtml = useMemo(() => (routes.length > 0 ? buildMapHtml(routes) : null), [routes]);
 
   useEffect(() => {
-    // Explicit null check so route ID 0 works correctly.
-    if (
-      selectedId != null &&
-      webViewRef.current
-    ) {
+    if (selectedId != null && webViewRef.current) {
       webViewRef.current.injectJavaScript(
-        `window.selectRoute(${JSON.stringify(
-          selectedId
-        )}); true;`
+        `window.selectRoute(${JSON.stringify(selectedId)}); true;`
       );
     }
   }, [selectedId]);
@@ -473,93 +295,41 @@ export default function RouteOptionsScreen({
   };
 
   const handleStartRoute = () => {
-    const selectedRoute = routes.find(
-      (r) => r.id === selectedId
-    );
-
+    const selectedRoute = routes.find((r) => r.id === selectedId);
     if (!selectedRoute) return;
 
-    navigation?.navigate(
-      'Navigation',
-      {
-        selectedRoute,
-        travelMode,
-        destination,
-        profile,
-        preferences,
-      }
-    );
+    navigation?.navigate('Navigation', {
+      selectedRoute,
+      travelMode,
+      destination,
+      profile,
+      preferences,
+    });
   };
 
   return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: COLORS.heroTop
-      }}
-    >
-      <StatusBar
-        barStyle="dark-content"
-        backgroundColor={COLORS.heroTop}
-      />
+    <View style={{ flex: 1, backgroundColor: COLORS.heroTop }}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.heroTop} />
 
-      <View
-        style={[
-          styles.heroBand,
-          {
-            paddingTop:
-              insets.top + 14
-          }
-        ]}
-      >
-        <TouchableOpacity
-          style={[
-            styles.backLink,
-            {
-              top:
-                insets.top + 14
-            }
-          ]}
-          onPress={() =>
-            navigation?.goBack()
-          }
-        >
-          <Text style={styles.backLinkText}>
-            ‹ Back
-          </Text>
+      <View style={[styles.heroBand, { paddingTop: insets.top + 14 }]}>
+        <TouchableOpacity style={[styles.backLink, { top: insets.top + 14 }]} onPress={() => navigation?.goBack()}>
+          <Text style={styles.backLinkText}>‹ Back</Text>
         </TouchableOpacity>
-
-        <Text style={styles.headerTitle}>
-          Choose your route
-        </Text>
+        <Text style={styles.headerTitle}>Choose your route</Text>
       </View>
 
       {loading && (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator
-            size="large"
-            color={COLORS.primary}
-          />
-
-          <Text style={styles.loadingText}>
-            Finding your calmest routes…
-          </Text>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Finding your calmest routes…</Text>
         </View>
       )}
 
       {!loading && error && (
         <View style={styles.errorWrap}>
-          <Text style={styles.errorText}>
-            {error}
-          </Text>
-
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={fetchRoutes}
-          >
-            <Text style={styles.retryButtonText}>
-              Try again
-            </Text>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchRoutes}>
+            <Text style={styles.retryButtonText}>Try again</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -574,16 +344,12 @@ export default function RouteOptionsScreen({
                 javaScriptEnabled={true}
                 domStorageEnabled={true}
                 mixedContentMode="always"
-                source={{
-                  html: mapHtml
-                }}
+                source={{ html: mapHtml }}
                 style={styles.map}
                 onLoadEnd={() => {
                   webViewRef.current?.injectJavaScript(`
                     setTimeout(() => {
-                      if (window.map) {
-                        window.map.invalidateSize();
-                      }
+                      if (window.map) { window.map.invalidateSize(); }
                     }, 300);
                     true;
                   `);
@@ -592,296 +358,95 @@ export default function RouteOptionsScreen({
             )}
           </View>
 
-          <View
-            style={[
-              styles.sheet,
-              {
-                paddingBottom:
-                  insets.bottom + 8
-              }
-            ]}
-          >
-            <View
-              style={styles.sheetHandle}
-            />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 8 }]}>
+            <View style={styles.sheetHandle} />
 
-            {/* Drive / Walk toggle */}
-            <View
-              style={styles.modeToggleRow}
-            >
+            <View style={styles.modeToggleRow}>
               <TouchableOpacity
-                style={[
-                  styles.modeToggleButton,
-                  travelMode === 'driving' &&
-                    styles.modeToggleButtonActive,
-                ]}
-                onPress={() =>
-                  setTravelMode('driving')
-                }
+                style={[styles.modeToggleButton, travelMode === 'driving' && styles.modeToggleButtonActive]}
+                onPress={() => setTravelMode('driving')}
               >
-                <Text
-                  style={[
-                    styles.modeToggleText,
-                    travelMode ===
-                      'driving' &&
-                      styles.modeToggleTextActive,
-                  ]}
-                >
+                <Text style={[styles.modeToggleText, travelMode === 'driving' && styles.modeToggleTextActive]}>
                   Drive
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[
-                  styles.modeToggleButton,
-                  travelMode === 'walking' &&
-                    styles.modeToggleButtonActive,
-                ]}
-                onPress={() =>
-                  setTravelMode('walking')
-                }
+                style={[styles.modeToggleButton, travelMode === 'walking' && styles.modeToggleButtonActive]}
+                onPress={() => setTravelMode('walking')}
               >
-                <Text
-                  style={[
-                    styles.modeToggleText,
-                    travelMode ===
-                      'walking' &&
-                      styles.modeToggleTextActive,
-                  ]}
-                >
+                <Text style={[styles.modeToggleText, travelMode === 'walking' && styles.modeToggleTextActive]}>
                   Walk
                 </Text>
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-            >
-              <Text
-                style={styles.sheetSummary}
-              >
-                {routes.length} route
-                {routes.length !== 1
-                  ? 's'
-                  : ''}{' '}
-                found · tap a route to
-                preview it on the map
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.sheetSummary}>
+                {routes.length} route{routes.length !== 1 ? 's' : ''} found · tap a route to preview it on the map
               </Text>
 
               {trafficInfo && (
-                <Text
-                  style={[
-                    styles.metaText,
-                    {
-                      marginBottom: 12
-                    }
-                  ]}
-                >
-                  Live traffic near start:{' '}
-                  {Math.round(
-                    trafficInfo.congestion *
-                      100
-                  )}
-                  % congested
+                <Text style={[styles.metaText, { marginBottom: 12 }]}>
+                  Live traffic near start: {Math.round(trafficInfo.congestion * 100)}% congested
                 </Text>
               )}
 
-              {routes.map(
-                (r, index) => {
-                  const isRecommended =
-                    r.isRecommended;
+              {routes.map((r, index) => {
+                const isRecommended = r.isRecommended;
+                const isSelected = r.id === selectedId;
+                const distanceKm = Math.round((r.distanceMeters / 1000) * 10) / 10;
+                const durationSeconds = travelMode === 'walking' ? r.durationSecondsWalking : r.durationSecondsDriving;
+                const durationLabel = formatDuration(durationSeconds, travelMode);
 
-                  const isSelected =
-                    r.id === selectedId;
+                return (
+                  <TouchableOpacity
+                    key={r.id}
+                    style={[styles.routeCard, isSelected && styles.routeCardSelected]}
+                    onPress={() => handleSelectCard(r)}
+                  >
+                    {isRecommended && (
+                      <View style={styles.recommendedBadge}>
+                        <Text style={styles.recommendedBadgeText}>Recommended</Text>
+                      </View>
+                    )}
 
-                  const distanceKm =
-                    Math.round(
-                      (r.distanceMeters /
-                        1000) *
-                        10
-                    ) / 10;
-
-                  const durationSeconds =
-                    travelMode ===
-                    'walking'
-                      ? r.durationSecondsWalking
-                      : r.durationSecondsDriving;
-
-                  const durationLabel =
-                    formatDuration(
-                      durationSeconds,
-                      travelMode
-                    );
-
-                  return (
-                    <TouchableOpacity
-                      key={r.id}
-                      style={[
-                        styles.routeCard,
-                        isSelected &&
-                          styles.routeCardSelected
-                      ]}
-                      onPress={() =>
-                        handleSelectCard(r)
-                      }
-                    >
-                      {isRecommended && (
+                    <View style={styles.routeTopRow}>
+                      <View style={styles.routeNameRow}>
                         <View
-                          style={
-                            styles.recommendedBadge
-                          }
-                        >
-                          <Text
-                            style={
-                              styles.recommendedBadgeText
-                            }
-                          >
-                            Recommended
-                          </Text>
-                        </View>
-                      )}
-
-                      <View
-                        style={
-                          styles.routeTopRow
-                        }
-                      >
-                        <View
-                          style={
-                            styles.routeNameRow
-                          }
-                        >
-                          <View
-                            style={[
-                              styles.routeColorDot,
-                              {
-                                backgroundColor:
-                                  ROUTE_LINE_COLORS[
-                                    index %
-                                      ROUTE_LINE_COLORS.length
-                                  ],
-                              },
-                            ]}
-                          />
-
-                          <Text
-                            style={
-                              styles.routeName
-                            }
-                          >
-                            Route{' '}
-                            {String.fromCharCode(
-                              65 + index
-                            )}
-                          </Text>
-                        </View>
-
-                        <View>
-                          <Text
-                            style={[
-                              styles.scoreValue,
-                              {
-                                color:
-                                  scoreColor(
-                                    r.sensoryScore
-                                  ),
-                              },
-                            ]}
-                          >
-                            {r.sensoryScore}
-                          </Text>
-
-                          <Text
-                            style={
-                              styles.scoreLabel
-                            }
-                          >
-                            sensory score
-                          </Text>
-                        </View>
+                          style={[
+                            styles.routeColorDot,
+                            { backgroundColor: ROUTE_LINE_COLORS[index % ROUTE_LINE_COLORS.length] },
+                          ]}
+                        />
+                        <Text style={styles.routeName}>Route {String.fromCharCode(65 + index)}</Text>
                       </View>
 
-                      <View
-                        style={styles.metaRow}
-                      >
-                        <Text
-                          style={
-                            styles.metaText
-                          }
-                        >
-                          {durationLabel}
+                      <View>
+                        <Text style={[styles.scoreValue, { color: scoreColor(r.sensoryScore) }]}>
+                          {r.sensoryScore}
                         </Text>
-
-                        <Text
-                          style={
-                            styles.metaDot
-                          }
-                        >
-                          ·
-                        </Text>
-
-                        <Text
-                          style={
-                            styles.metaText
-                          }
-                        >
-                          {distanceKm} km
-                        </Text>
-
-                        <Text
-                          style={
-                            styles.metaDot
-                          }
-                        >
-                          ·
-                        </Text>
-
-                        <Text
-                          style={
-                            styles.metaText
-                          }
-                        >
-                          {travelMode ===
-                          'walking'
-                            ? 'walking'
-                            : 'driving'}
-                        </Text>
+                        <Text style={styles.scoreLabel}>sensory score</Text>
                       </View>
+                    </View>
 
-                      <Text
-                        style={
-                          styles.explanationText
-                        }
-                      >
-                        {isRecommended
-                          ? topExplanation
-                          : fallbackExplanation(
-                              r.sensoryScore
-                            )}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                }
-              )}
+                    <View style={styles.metaRow}>
+                      <Text style={styles.metaText}>{durationLabel}</Text>
+                      <Text style={styles.metaDot}>·</Text>
+                      <Text style={styles.metaText}>{distanceKm} km</Text>
+                      <Text style={styles.metaDot}>·</Text>
+                      <Text style={styles.metaText}>{travelMode === 'walking' ? 'walking' : 'driving'}</Text>
+                    </View>
 
-              <TouchableOpacity
-                style={
-                  styles.startButton
-                }
-                onPress={
-                  handleStartRoute
-                }
-                disabled={
-                  selectedId == null
-                }
-              >
-                <Text
-                  style={
-                    styles.startButtonText
-                  }
-                >
-                  Start this route
-                </Text>
+                    <Text style={styles.explanationText}>
+                      {isRecommended ? topExplanation : fallbackExplanation(r.sensoryScore)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+
+              <TouchableOpacity style={styles.startButton} onPress={handleStartRoute} disabled={selectedId == null}>
+                <Text style={styles.startButtonText}>Start this route</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
