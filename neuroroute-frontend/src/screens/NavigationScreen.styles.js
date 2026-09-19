@@ -48,14 +48,14 @@ export default StyleSheet.create({
     flex: 1,
   },
   bannerInstruction: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: COLORS.text,
   },
   bannerDistance: {
-    fontSize: 12,
+    fontSize: 13,
     color: COLORS.textMuted,
-    marginTop: 2,
+    marginTop: 3,
   },
 
   backButton: {
@@ -93,6 +93,23 @@ export default StyleSheet.create({
     shadowRadius: 10,
     elevation: 6,
   },
+
+  // --- NEW: one primary figure instead of three equal stat blocks ---
+  bottomPrimary: {
+    flex: 1,
+  },
+  bottomPrimaryValue: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  bottomSecondaryText: {
+    fontSize: 13,
+    color: COLORS.textMuted,
+    marginTop: 2,
+  },
+
+  // Kept for compatibility if referenced elsewhere.
   bottomStat: {
     alignItems: 'center',
   },
@@ -105,6 +122,19 @@ export default StyleSheet.create({
     fontSize: 11,
     color: COLORS.textMuted,
     marginTop: 2,
+  },
+
+  // --- NEW: "End" as a quiet text link, not a solid red button ---
+  // A rare, deliberate action doesn't need the same visual weight
+  // as the ETA the user is looking at constantly.
+  endLink: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  endLinkText: {
+    color: COLORS.error,
+    fontSize: 14,
+    fontWeight: '600',
   },
 
   endButton: {
@@ -159,9 +189,11 @@ export default StyleSheet.create({
     fontWeight: '600',
   },
 
-  // --- NEW: "Better route found" reroute suggestion banner ---
+  // --- "Better route found" reroute suggestion banner ---
   // Matches the synopsis flowchart's "Suggest New Route -> Ask user
-  // to switch" step. Sits above the turn instruction banner.
+  // to switch" step. Uses COLORS.accent (not primary) so this is
+  // the ONE thing on screen using that color — color now signals
+  // "this needs a decision" rather than being decorative everywhere.
   rerouteBanner: {
     position: 'absolute',
     left: 16,
@@ -169,8 +201,8 @@ export default StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.card,
     padding: 16,
-    borderWidth: 1.5,
-    borderColor: COLORS.primary,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.accent,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
@@ -194,7 +226,7 @@ export default StyleSheet.create({
   },
   rerouteAcceptButton: {
     flex: 1,
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.accent,
     borderRadius: RADIUS.input,
     paddingVertical: 10,
     alignItems: 'center',

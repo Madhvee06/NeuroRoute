@@ -1,7 +1,7 @@
 //NavigationScreen.js
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, Animated } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
@@ -76,14 +76,46 @@ function buildMapHtml(routeCoords) {
     );
     window.map = map;
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
+    L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OSM Team',
       maxZoom: 19,
+      subdomains: ['a', 'b', 'c'],
     }).addTo(map);
 
     if (routeCoords.length > 0) {
-      const line = L.polyline(routeCoords, { color: '${COLORS.primary}', weight: 5, opacity: 0.9 }).addTo(map);
+      const line = L.polyline(routeCoords, {
+        color: '${COLORS.primary}',
+        weight: 6,
+        opacity: 0.95,
+        lineJoin: 'round',
+        lineCap: 'round'
+      }).addTo(map);
       map.fitBounds(line.getBounds(), { padding: [50, 50] });
+
+      // Flat dot markers for source/destination — same style as
+      // RouteOptionsScreen, so the two screens read as one system.
+      function flatDot(label, color) {
+        return L.divIcon({
+          className: '',
+          html:
+            '<div style="width:26px;height:26px;border-radius:13px;' +
+            'background:' + color + ';border:3px solid #FFFFFF;' +
+            'box-shadow:0 1px 4px rgba(0,0,0,0.25);' +
+            'display:flex;align-items:center;justify-content:center;' +
+            'font-size:11px;font-weight:700;color:#FFFFFF;">' +
+            label + '</div>',
+          iconSize: [26, 26],
+          iconAnchor: [13, 13]
+        });
+      }
+
+      L.marker(routeCoords[0], {
+        icon: flatDot('S', '${COLORS.primary}')
+      }).addTo(map).bindPopup('Start');
+
+      L.marker(routeCoords[routeCoords.length - 1], {
+        icon: flatDot('D', '${COLORS.accent}')
+      }).addTo(map).bindPopup('Destination');
     }
 
     let userMarker = null;
@@ -153,6 +185,35 @@ export default function NavigationScreen({ navigation, route }) {
 
   // Reroute suggestion state
   const [rerouteSuggestion, setRerouteSuggestion] = useState(null); // the candidate route object, or null
+
+  // --- Motion: banners fade + slide in on change instead of
+  // popping instantly. A hard-appearing/disappearing instruction
+  // every ~30s reads as an interruption; an eased transition reads
+  // as an update. Kept simple (mount-in only, no exit animation)
+  // since these banners are conditionally rendered.
+  const turnAnim = useRef(new Animated.Value(0)).current;
+  const rerouteAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    turnAnim.setValue(0);
+    Animated.timing(turnAnim, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStepIndex]);
+
+  useEffect(() => {
+    if (rerouteSuggestion) {
+      rerouteAnim.setValue(0);
+      Animated.timing(rerouteAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [rerouteSuggestion]);
 
   const routeCoords = useMemo(() => {
     if (!activeRoute?.geometry?.coordinates) return [];
@@ -336,9 +397,13 @@ export default function NavigationScreen({ navigation, route }) {
   const distanceKmRemaining = Math.round((remainingMeters / 1000) * 10) / 10;
   const etaLabel = formatDuration(Math.max(60, remainingSeconds), travelMode);
 
-  // Vertical stacking: reroute banner sits above the turn instruction
-  // banner when both are visible, so they don't overlap.
-  const turnBannerTop = insets.top + 12 + 52 + (rerouteSuggestion ? 100 : 0);
+  // Single banner slot: the reroute prompt is a DECISION, the turn
+  // banner is GUIDANCE. Showing both at once is exactly the kind of
+  // visual noise this pass is removing, so the turn banner is
+  // suppressed whenever a reroute suggestion is up. Both share the
+  // same top offset, which also removes the old manual
+  // "turnBannerTop" stacking arithmetic entirely.
+  const bannerTop = insets.top + 12 + 52;
 
   return (
     <View style={styles.container}>
@@ -361,7 +426,23 @@ export default function NavigationScreen({ navigation, route }) {
       </TouchableOpacity>
 
       {rerouteSuggestion && (
-        <View style={[styles.rerouteBanner, { top: insets.top + 12 + 52 }]}>
+        <Animated.View
+          style={[
+            styles.rerouteBanner,
+            {
+              top: bannerTop,
+              opacity: rerouteAnim,
+              transform: [
+                {
+                  translateY: rerouteAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-10, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
           <Text style={styles.rerouteBannerTitle}>
             Calmer route available
           </Text>
@@ -384,11 +465,27 @@ export default function NavigationScreen({ navigation, route }) {
               <Text style={styles.rerouteDismissText}>Keep current</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
       )}
 
-      {!arrived && currentStep && (
-        <View style={[styles.banner, { top: turnBannerTop }]}>
+      {!arrived && currentStep && !rerouteSuggestion && (
+        <Animated.View
+          style={[
+            styles.banner,
+            {
+              top: bannerTop,
+              opacity: turnAnim,
+              transform: [
+                {
+                  translateY: turnAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-10, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
           <View style={styles.bannerIconWrap}>
             <Text style={styles.bannerIconText}>
               {travelMode === 'walking' ? '🚶' : '→'}
@@ -402,7 +499,7 @@ export default function NavigationScreen({ navigation, route }) {
               in {Math.round(currentStep.distanceMeters)} m
             </Text>
           </View>
-        </View>
+        </Animated.View>
       )}
 
       {arrived ? (
@@ -416,16 +513,20 @@ export default function NavigationScreen({ navigation, route }) {
         </View>
       ) : (
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
-          <View style={styles.bottomStat}>
-            <Text style={styles.bottomStatValue}>{etaLabel}</Text>
-            <Text style={styles.bottomStatLabel}>ETA</Text>
+          {/* Consolidated: one primary figure (ETA, large) with
+              distance as a quiet secondary line beneath it, instead
+              of three equally-weighted stat blocks competing for
+              attention. "End" demoted to a plain text link since
+              it's a rare action, not a frequent one. */}
+          <View style={styles.bottomPrimary}>
+            <Text style={styles.bottomPrimaryValue}>{etaLabel}</Text>
+            <Text style={styles.bottomSecondaryText}>
+              {distanceKmRemaining} km remaining
+            </Text>
           </View>
-          <View style={styles.bottomStat}>
-            <Text style={styles.bottomStatValue}>{distanceKmRemaining} km</Text>
-            <Text style={styles.bottomStatLabel}>remaining</Text>
-          </View>
-          <TouchableOpacity style={styles.endButton} onPress={handleEndNavigation}>
-            <Text style={styles.endButtonText}>End</Text>
+
+          <TouchableOpacity style={styles.endLink} onPress={handleEndNavigation}>
+            <Text style={styles.endLinkText}>End</Text>
           </TouchableOpacity>
         </View>
       )}

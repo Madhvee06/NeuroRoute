@@ -156,10 +156,35 @@ function buildMapHtml(routes) {
       map.invalidateSize();
     }, 300);
 
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
+    // OpenStreetMap "Humanitarian" style — full color, same OSM
+    // data, no API key required. CARTO's basemaps.cartocdn.com
+    // (used previously) now requires a paid/registered API key for
+    // any real usage, which is why that showed a watermark instead
+    // of tiles. This style keeps colors but has noticeably fewer
+    // commercial POI icons/labels than the plain osm.org style.
+    L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OSM Team',
       maxZoom: 19,
+      subdomains: ['a', 'b', 'c'],
     }).addTo(map);
+
+    // Flat dot marker builder — replaces Leaflet's default pin
+    // (teardrop shape + drop shadow + blue/white coloring), which
+    // reads as heavy chrome next to a calm basemap.
+    function flatDot(label, color) {
+      return L.divIcon({
+        className: '',
+        html:
+          '<div style="width:26px;height:26px;border-radius:13px;' +
+          'background:' + color + ';border:3px solid #FFFFFF;' +
+          'box-shadow:0 1px 4px rgba(0,0,0,0.25);' +
+          'display:flex;align-items:center;justify-content:center;' +
+          'font-size:11px;font-weight:700;color:#FFFFFF;">' +
+          label + '</div>',
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
+      });
+    }
 
     const lines = {};
 
@@ -229,13 +254,15 @@ function buildMapHtml(routes) {
       }
 
       startMarker = L.marker(
-        selected.coords[0]
+        selected.coords[0],
+        { icon: flatDot('S', '${COLORS.primary}') }
       )
         .addTo(map)
         .bindPopup('Start');
 
       endMarker = L.marker(
-        selected.coords[selected.coords.length - 1]
+        selected.coords[selected.coords.length - 1],
+        { icon: flatDot('D', '${COLORS.accent}') }
       )
         .addTo(map)
         .bindPopup('Destination');
